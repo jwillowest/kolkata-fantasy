@@ -1,8 +1,9 @@
 "use strict";
 (async function () {
   const get = f => fetch("data/" + f).then(r => r.json());
-  const [league, p1, p2, p3] = await Promise.all([
+  const [league, p1, p2, p3, p4] = await Promise.all([
     get("league.json"), get("phase1.json"), get("phase2.json").catch(() => null), get("phase3.json").catch(() => null),
+    get("phase4.json").catch(() => null),
   ]);
   const ALL = "all";
   const years = Object.keys(p1.seasons).map(Number).sort((a, b) => b - a);
@@ -181,7 +182,8 @@
 
   // ---------- overview ----------
   const curYear = league.current_season;
-  const tile = ([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
+  // Text values (team names) use a smaller face than numbers.
+  const tile = ([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v${/^[\d+−\-.,%<> W$]+$/.test(String(v).replace(/<[^>]+>/g, "")) ? "" : " txt"}">${v}</div><div class="d">${d}</div></div>`;
   const allStandings = years.flatMap(y => withYear(p1.seasons[y].standings, y).map(r => ({ ...r, games: r.w + r.l + r.t, weeks: p1.seasons[y].periods_played })));
   p1.all_time.forEach(r => (r.ppg_x = r.pf / Math.max(1, r.w + r.l + r.t)));
   function renderOverview() {
@@ -574,6 +576,135 @@
     document.querySelector('[data-tab="draft"]').hidden = true;
   }
 
+  // ---------- simulations ----------
+  let renderSims = () => {};
+  if (p4 && Object.keys(p4.seasons).length) {
+    const sYears = Object.keys(p4.seasons).map(Number).sort((a, b) => b - a);
+    const P = v => v == null ? NA : (v >= 0.995 && v < 1 ? ">99%" : v > 0 && v < 0.005 ? "<1%" : Math.round(v * 100) + "%");
+    const allSimTeams = sYears.flatMap(y => withYear(p4.seasons[y].teams, y).map(t => ({ ...t, weeks: p4.seasons[y].weeks, complete: p4.seasons[y].complete })));
+    const doneTeams = allSimTeams.filter(t => t.complete);
+    const nm = id => (allSimTeams.find(t => t.team_id === id) || {}).name;
+    renderSims = y => {
+      const all = y === ALL;
+      const s = all ? null : p4.seasons[y];
+      const N = p4.n_sims.toLocaleString();
+      $("#swap-wrap").hidden = all;
+      $("#sims-hist-card").hidden = true;
+      if (all) {
+        $("#sims-title").textContent = "Simulations: all seasons";
+        $("#sims-hint").innerHTML = `Expected titles = sum of each season's title odds across ${N} random schedules (same divisions). <b>Titles vs expected</b> above zero = won more than the schedules gave you; below = unlucky. <b>Schedule luck</b> = real wins minus average wins across every other team's schedule.`;
+        setFlag("#sims-flag", ["Finished seasons only."]);
+        const at = p4.all_time;
+        const mostLucky = at[0], leastLucky = at[at.length - 1];
+        const sched = at.slice().sort((a, b) => b.schedule_luck - a.schedule_luck);
+        $("#sims-tiles").innerHTML = [
+          ["Most titles over expected", signed(mostLucky.titles_vs_x, 2), `${esc(mostLucky.franchise)} · ${mostLucky.titles} won, ${mostLucky.xtitles.toFixed(2)} expected`],
+          ["Most titles under expected", signed(leastLucky.titles_vs_x, 2), `${esc(leastLucky.franchise)} · ${leastLucky.titles} won, ${leastLucky.xtitles.toFixed(2)} expected`],
+          ["Kindest schedules", signed(sched[0].schedule_luck, 1) + " W", esc(sched[0].franchise)],
+          ["Toughest schedules", signed(sched[sched.length - 1].schedule_luck, 1) + " W", esc(sched[sched.length - 1].franchise)],
+        ].map(tile).join("");
+        $("#sims-chart-title").textContent = "Titles vs expected";
+        hbar($("#sims-chart"), at.map(r => ({ label: r.franchise, value: r.titles_vs_x, owner_key: r.owner_key, r })), {
+          fmt: v => signed(v, 2),
+          tipFn: it => `<b>${esc(it.r.franchise)}</b><br>${it.r.titles} titles · ${it.r.xtitles.toFixed(2)} expected<br>Playoffs ${it.r.playoffs} · ${it.r.xplayoffs.toFixed(1)} expected`,
+        });
+        table($("#sims-table"), [
+          { key: "franchise", label: "Franchise", l: true, fmt: r => esc(r.franchise), sort: r => r.franchise.toLowerCase(), asc: true },
+          { key: "seasons", label: "Seasons" },
+          { key: "titles", label: "Titles" },
+          { key: "xtitles", label: "Expected titles", fmt: r => r.xtitles.toFixed(2), pv: r => r.xtitles / r.seasons },
+          { key: "titles_vs_x", label: "Titles vs expected", fmt: r => `<b>${signed(r.titles_vs_x, 2)}</b>`, pv: r => r.titles_vs_x / r.seasons },
+          { key: "xtitles_div", label: "Exp. titles (random divisions)", fmt: r => r.xtitles_div.toFixed(2) },
+          { key: "playoffs", label: "Playoffs" },
+          { key: "xplayoffs", label: "Expected playoffs", fmt: r => r.xplayoffs.toFixed(1) },
+          { key: "playoffs_vs_x", label: "Playoffs vs expected", fmt: r => signed(r.playoffs_vs_x, 1), pv: r => r.playoffs_vs_x / r.seasons },
+          { key: "schedule_luck", label: "Schedule luck (W)", fmt: r => signed(r.schedule_luck, 1), pv: r => r.schedule_luck / r.seasons },
+        ], at, { sort: "titles_vs_x" });
+        return;
+      }
+      const v = s.validation;
+      const check = v.seeds && (v.champion !== false) ? "Engine check: the real schedule reproduces ESPN's actual seeds" + (s.complete ? " and champion" : "") + " ✓" : "Engine check failed for this season: treat odds with caution";
+      const champ = s.teams.find(t => t.champion);
+      if (s.complete) {
+        const sm = s.summary.schedules, dv = s.summary.divisions;
+        $("#sims-title").textContent = `${y}: how often does the title change hands?`;
+        $("#sims-hint").innerHTML = `Same weekly scores, different schedules. <b>Random schedules</b>: ${N} schedules with the real divisions (teams shuffled within their division). <b>Random divisions</b>: ${N} runs where teams are also dealt into new divisions. Playoffs are seeded with ESPN's rules for ${y} and played out with each team's real playoff-week scores. <b>Weighted</b> = average weekly score as a share of that week's league average (100 = average).`;
+        setFlag("#sims-flag", [check]);
+        const fav = s.teams.find(t => t.team_id === sm.favorite), favD = s.teams.find(t => t.team_id === dv.favorite);
+        $("#sims-tiles").innerHTML = [
+          ["Real champion", esc(champ ? champ.name : "–"), champ ? `wins the title in ${P(sm.champion_kept)} of random schedules` : ""],
+          ["Title changes hands", P(sm.changes_hands), "of random schedules (same divisions)"],
+          ["With random divisions", P(dv.changes_hands), `title changes hands · favorite ${esc(favD.name)} ${P(dv.favorite_title)}`],
+          ["Most likely champion", esc(fav.name), `${P(sm.favorite_title)} of random schedules`],
+        ].map(tile).join("");
+      } else {
+        $("#sims-title").textContent = `${y}: live playoff and title odds`;
+        $("#sims-hint").innerHTML = `${N} simulations of the rest of the season on the real remaining schedule (${s.weeks_left} regular-season weeks plus playoffs), drawing each team's future scores from its own weekly scores so far. Seeded with ESPN's rules: division winners first, then record and tiebreakers; top ${s.n_playoff} make the playoffs.`;
+        setFlag("#sims-flag", [check, `After ${s.weeks} weeks. Simple model: past scores only, no injuries or roster moves.`]);
+        const byT = s.teams.slice().sort((a, b) => b.projection.title - a.projection.title);
+        const byP = s.teams.slice().sort((a, b) => b.projection.playoff - a.projection.playoff);
+        const bubble = byP.filter(t => t.projection.playoff > 0.2 && t.projection.playoff < 0.8).length;
+        $("#sims-tiles").innerHTML = [
+          ["Title favorite", esc(byT[0].name), `${P(byT[0].projection.title)} to win it all`],
+          ["Best #1 seed odds", esc(s.teams.slice().sort((a, b) => b.projection.seed1 - a.projection.seed1)[0].name), P(Math.max(...s.teams.map(t => t.projection.seed1))) + " to finish #1 seed"],
+          ["Teams on the bubble", bubble, "20–80% playoff odds"],
+          ["Weeks left", s.weeks_left, "regular season"],
+        ].map(tile).join("");
+      }
+      const key = s.complete ? "schedules" : "projection";
+      $("#sims-chart-title").textContent = s.complete ? "Title odds across random schedules" : "Title odds";
+      hbar($("#sims-chart"), s.teams.slice().sort((a, b) => b[key].title - a[key].title).map(t => ({ label: t.name, value: 100 * t[key].title, owner_key: t.owner_key, t })), {
+        fmt: v => v < 0.5 && v > 0 ? "<1%" : Math.round(v) + "%",
+        tipFn: it => `<b>${esc(it.t.name)}</b><br>Title ${P(it.t[key].title)} · final ${P(it.t[key].final)}<br>Playoffs ${P(it.t[key].playoff)} · #1 seed ${P(it.t[key].seed1)}`,
+      });
+      // Win distribution for the picked team (finished seasons).
+      const me = SEL && s.teams.find(t => t.owner_key === SEL);
+      if (me && s.complete) {
+        $("#sims-hist-card").hidden = false;
+        $("#sims-hist-title").textContent = `${me.name}: wins across random schedules`;
+        $("#sims-hist-hint").textContent = `Real: ${me.wins} wins. Average across schedules: ${me.schedules.wins.toFixed(1)}.`;
+        const h = me.schedules.hist.map((p, w) => ({ w, p })).filter(x => x.p > 0.001);
+        hbar($("#sims-hist"), h.map(x => ({ label: `${x.w} wins${x.w === Math.round(me.wins) ? " (real)" : ""}`, value: 100 * x.p, owner_key: null })), { fmt: v => v.toFixed(v < 1 ? 1 : 0) + "%" });
+      }
+      const pool = s.complete ? doneTeams : allSimTeams;
+      const cols = [
+        { key: "seed", label: "Seed", asc: true },
+        { key: "name", label: "Team", l: true, fmt: t => teamCell(t) + (t.champion ? ' <span class="tag">champion</span>' : ""), sort: t => t.name.toLowerCase(), asc: true },
+        { key: "wins", label: "Wins", fmt: t => num(t.wins, 0), pv: t => t.wins / t.weeks },
+        { key: "weighted", label: "Weighted", fmt: t => num(t.weighted, 1), pv: t => t.weighted },
+        { key: "above_avg_wk", label: "Pts vs avg/wk", fmt: t => signed(t.above_avg_wk, 1), pv: t => t.above_avg_wk },
+        { key: "swap_mean", label: "Avg W, others' schedules", fmt: t => `${num(t.swap_mean, 1)} <span class="owner">${num(t.swap_worst, 0)}–${num(t.swap_best, 0)}</span>` },
+        { key: "schedule_luck", label: "Schedule luck", fmt: t => signed(t.schedule_luck, 1), pv: t => t.schedule_luck / t.weeks },
+      ];
+      if (s.complete) cols.push(
+        { key: "sp", label: "Playoffs", fmt: t => P(t.schedules.playoff), sort: t => t.schedules.playoff, pv: t => t.schedules.playoff },
+        { key: "s1", label: "#1 seed", fmt: t => P(t.schedules.seed1), sort: t => t.schedules.seed1 },
+        { key: "st", label: "Title", fmt: t => `<b>${P(t.schedules.title)}</b>`, sort: t => t.schedules.title, pv: t => t.schedules.title },
+        { key: "dp", label: "Playoffs (rand. div.)", fmt: t => P(t.divisions.playoff), sort: t => t.divisions.playoff },
+        { key: "dt", label: "Title (rand. div.)", fmt: t => P(t.divisions.title), sort: t => t.divisions.title },
+      );
+      else cols.push(
+        { key: "pw", label: "Proj. wins", fmt: t => num(t.projection.wins, 1), sort: t => t.projection.wins },
+        { key: "pp", label: "Playoffs", fmt: t => `<b>${P(t.projection.playoff)}</b>`, sort: t => t.projection.playoff },
+        { key: "p1", label: "#1 seed", fmt: t => P(t.projection.seed1), sort: t => t.projection.seed1 },
+        { key: "pf2", label: "Final", fmt: t => P(t.projection.final), sort: t => t.projection.final },
+        { key: "pt", label: "Title", fmt: t => `<b>${P(t.projection.title)}</b>`, sort: t => t.projection.title },
+      );
+      table($("#sims-table"), cols, s.teams, { sort: s.complete ? "st" : "pt", pool });
+      // swap matrix
+      const order = s.teams.map(t => t.team_id);
+      const ix = Object.fromEntries(s.swap.order.map((t, i) => [t, i]));
+      const W = s.swap.wins, mx = Math.max(...W.flat()), mn = Math.min(...W.flat());
+      const shade = v => `background: rgba(42,120,214,${(0.06 + 0.55 * (v - mn) / Math.max(1, mx - mn)).toFixed(2)})`;
+      $("#swap").innerHTML = `<thead><tr><th class="l">Team ↓ / schedule of →</th>${order.map(c => `<th class="rot">${esc(nm(c))}</th>`).join("")}</tr></thead><tbody>` +
+        order.map(r => `<tr class="${SEL && s.teams.find(t => t.team_id === r).owner_key === SEL ? "me" : ""}"><td class="l">${esc(nm(r))}</td>` +
+          order.map(c => { const v = W[ix[r]][ix[c]]; return `<td class="${r === c ? "diag" : ""}" style="${shade(v)}" title="${esc(nm(r))} with ${esc(nm(c))}'s schedule: ${v} wins">${v % 1 ? v.toFixed(1) : v}</td>`; }).join("") + "</tr>").join("") + "</tbody>";
+    };
+    seasonSelect($("#sims-select"), sYears, v => renderSims(v));
+  } else {
+    document.querySelector('[data-tab="sims"]').hidden = true;
+  }
+
   // ---------- picker + percentile toggle ----------
   const picker = $("#team-picker");
   picker.innerHTML = '<option value="">All teams (no highlight)</option>' +
@@ -587,6 +718,7 @@
     renderSeason(selVal("#season-select")); renderRegret(selVal("#regret-select"));
     if (p2) renderWaivers(selVal("#waiver-select"));
     if (p3) renderDraft(selVal("#draft-select"));
+    if (p4) renderSims(selVal("#sims-select"));
   }
   picker.addEventListener("change", () => {
     SEL = picker.value || null;

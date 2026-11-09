@@ -13,7 +13,7 @@ Libraries (pip, not forks): [espn_api](https://github.com/cwendt94/espn-api) for
    lineup used), champions by season, all-time owner table.
 2. **Waivers** (done): started points per add, points per FAAB dollar, overpay vs next-highest bid, best pickups, busts, all-time waiver table.
 3. **Draft vs ADP** (done): FantasyPros consensus (nflreadpy) vs our picks and regular-season points; steals, reaches, most/least valuable picks, draft boards, all-time draft record.
-4. Schedule and division simulations. *(planned)*
+4. **Simulations** (done): ESPN seeding/bracket engine validated against every real season; weighted scoring, schedule swap, 10,000 random schedules and division setups (title odds, how often the title changes hands), live playoff/title odds for the current season.
 
 ## Local use
 

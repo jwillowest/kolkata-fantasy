@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from . import config
-from .analysis import phase1, phase2, phase3
+from .analysis import phase1, phase2, phase3, phase4
 from .config import ROOT
 
 SITE = ROOT / "site"
@@ -82,6 +82,7 @@ def main() -> None:
     p1 = phase1.build(seasons)  # also sets hashed owner_key on every team
     p2 = phase2.build(seasons)
     p3 = phase3.build(seasons, refresh_adp=args.refresh)
+    p4 = phase4.build(seasons)
     draft_notes = {}
     for y, d in p3["seasons"].items():
         n = []
@@ -110,6 +111,7 @@ def main() -> None:
     (SITE / "data" / "phase1.json").write_text(json.dumps(p1))
     (SITE / "data" / "phase2.json").write_text(json.dumps(p2))
     (SITE / "data" / "phase3.json").write_text(json.dumps(p3))
+    (SITE / "data" / "phase4.json").write_text(json.dumps(p4))
     logging.info("wrote %s (%d seasons, %d missing)", SITE, len(seasons), len(missing))
 
 

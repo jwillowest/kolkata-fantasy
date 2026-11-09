@@ -19,7 +19,7 @@ from .config import ROOT, Config
 
 log = logging.getLogger(__name__)
 RAW_DIR = ROOT / "data" / "raw"
-CACHE_VERSION = 4  # bump when the normalized shape changes, to force a refetch
+CACHE_VERSION = 5  # bump when the normalized shape changes, to force a refetch
 BENCH_SLOTS = {20, 21}  # BE, IR
 DEFAULT_POS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "D/ST"}  # player.defaultPositionId
 
@@ -250,6 +250,10 @@ def fetch_season(cfg: Config, year: int) -> dict:
             "slot_counts": _slot_counts(lg),
             "matchup_periods": matchup_periods,
             "divisions": divisions,
+            # Playoff rules for simulations: seeding tiebreak, bracket size, round length, divisions.
+            "schedule": {k: (s._raw_schedule_settings or {}).get(k) for k in (
+                "playoffSeedingRule", "playoffSeedingRuleBy", "playoffMatchupPeriodLength",
+                "playoffReseed", "playoffTeamCount", "divisions")},
         },
         "teams": _teams(lg),
         "matchups": matchups,

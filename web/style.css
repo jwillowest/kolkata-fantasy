@@ -119,3 +119,9 @@ a { color: var(--text); }
 .pc.hi { color: #0a7a2f; } .pc.lo { color: #b3261e; }
 .board { max-height: 640px; overflow: auto; }
 td .tag { display: inline-block; font-size: 11px; padding: 0 5px; border-radius: 4px; background: var(--grid); color: var(--text-2); margin-left: 4px; }
+
+table.swap td, table.swap th { padding: 6px 6px; text-align: center; font-size: 12.5px; }
+table.swap th.rot { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; max-height: 150px; text-align: left; font-weight: 600; }
+table.swap td.diag { outline: 2px solid var(--text); outline-offset: -2px; font-weight: 700; }
+table.swap td.l, table.swap th.l { text-align: left; white-space: nowrap; }
+.tile .v.txt { font-size: 21px; line-height: 1.2; margin: 6px 0 2px; }

@@ -20,6 +20,7 @@
       <button role="tab" data-tab="regret">Start/Sit</button>
       <button role="tab" data-tab="waivers">Waivers</button>
       <button role="tab" data-tab="draft">Draft vs ADP</button>
+      <button role="tab" data-tab="sims">Simulations</button>
       <button role="tab" data-tab="data">Data notes</button>
     </nav>
   </div>
@@ -153,6 +154,26 @@
     <h2>All-time draft record</h2>
     <p class="hint">Finished seasons with FantasyPros consensus. Draft value per draft = average total pick value per season.</p>
     <div class="table-wrap"><table id="draft-alltime" class="sortable"></table></div>
+  </section>
+
+  <section id="tab-sims" class="tab" hidden>
+    <div class="controls">
+      <label>Season <select id="sims-select"></select></label>
+      <span id="sims-flag" class="flag" hidden></span>
+    </div>
+    <h2 id="sims-title">Simulations</h2>
+    <p class="hint" id="sims-hint"></p>
+    <div id="sims-tiles" class="tiles"></div>
+    <div class="grid2">
+      <div class="card"><h3 id="sims-chart-title">Title odds</h3><div id="sims-chart" class="chart"></div></div>
+      <div class="card" id="sims-hist-card" hidden><h3 id="sims-hist-title">Win distribution</h3><p class="hint" id="sims-hist-hint"></p><div id="sims-hist" class="chart"></div></div>
+    </div>
+    <div class="table-wrap" style="margin-top:16px"><table id="sims-table" class="sortable"></table></div>
+    <div id="swap-wrap">
+      <h2>Schedule swap</h2>
+      <p class="hint">Each row is a team's record if it had played the schedule of the team in that column (when that schedule meets the row team itself, it plays the column team instead). The diagonal is the real record. Darker = more wins.</p>
+      <div class="table-wrap"><table id="swap" class="swap"></table></div>
+    </div>
   </section>
 
   <section id="tab-data" class="tab" hidden>
