@@ -18,7 +18,7 @@ from .config import ROOT, Config
 
 log = logging.getLogger(__name__)
 RAW_DIR = ROOT / "data" / "raw"
-CACHE_VERSION = 2  # bump when the normalized shape changes, to force a refetch
+CACHE_VERSION = 3  # bump when the normalized shape changes, to force a refetch
 BENCH_SLOTS = {20, 21}  # BE, IR
 DEFAULT_POS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "D/ST"}  # player.defaultPositionId
 
@@ -38,17 +38,12 @@ def _get(league: League, **kw):
             time.sleep(2 ** attempt)
 
 
-def _owner_map(league: League) -> dict:
-    out = {}
-    for m in league.members or []:
-        first, last = (m.get("firstName") or "").strip(), (m.get("lastName") or "").strip()
-        # Public page: first name + last initial, never full surname.
-        label = f"{first} {last[:1]}.".strip() if first else (m.get("displayName") or "Unknown")
-        out[m["id"]] = label
-    return out
+def _owner_ids(league: League) -> set:
+    """Member ids only. Names (first/last/display) are never read or stored."""
+    return {m["id"] for m in (league.members or []) if m.get("id")}
 
 
-def _teams(league: League, owners: dict) -> list[dict]:
+def _teams(league: League) -> list[dict]:
     teams = []
     for t in league.teams:
         owner_ids = [o["id"] if isinstance(o, dict) else o for o in (t.owners or [])]
@@ -57,7 +52,6 @@ def _teams(league: League, owners: dict) -> list[dict]:
             "name": t.team_name,
             "abbrev": t.team_abbrev,
             "owner_ids": owner_ids,
-            "owner": " & ".join(owners.get(o, "Unknown") for o in owner_ids) or "Unknown",
             "division_id": t.division_id,
             "division": t.division_name,
             "final_rank": t.final_standing or None,
@@ -168,7 +162,7 @@ def fetch_season(cfg: Config, year: int) -> dict:
     last_done = max((m["period"] for m in done), default=0)
     scoring_periods = sorted({sp for p, sps in matchup_periods.items() if p <= last_done for sp in sps})
     lineups = _lineups(lg, scoring_periods) if scoring_periods else {}
-    owners = _owner_map(lg)
+    owners = _owner_ids(lg)
     tx_last = max(scoring_periods) if scoring_periods else 0
     transactions = _transactions(lg, tx_last + 1 if year == cfg.current_season else tx_last)
     tx_pids = {pid for t in transactions for pid in t["adds"] + t["drops"]}
@@ -196,7 +190,7 @@ def fetch_season(cfg: Config, year: int) -> dict:
     elif lineups and len(lineups) < len(scoring_periods):
         coverage["notes"].append(f"Lineups for only {len(lineups)} of {len(scoring_periods)} scoring periods.")
     if not owners:
-        coverage["notes"].append("No owner info: all-time owner stats may merge or split teams incorrectly.")
+        coverage["notes"].append("No manager ids: all-time franchise stats may merge or split teams incorrectly.")
 
     return {
         "cache_version": CACHE_VERSION,
@@ -215,7 +209,7 @@ def fetch_season(cfg: Config, year: int) -> dict:
             "matchup_periods": matchup_periods,
             "divisions": divisions,
         },
-        "teams": _teams(lg, owners),
+        "teams": _teams(lg),
         "matchups": matchups,
         "lineups": lineups,
         "transactions": transactions,

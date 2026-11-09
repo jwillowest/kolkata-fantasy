@@ -108,3 +108,7 @@ tr.me td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .foot { color: var(--muted); font-size: 12px; padding: 32px 16px; }
 .foot a, .banner a { color: inherit; }
 a { color: var(--text); }
+
+.picker-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
+.picker-row label { font-family: var(--display); text-transform: uppercase; font-size: 15px; }
+.picker-row select { min-width: 0; max-width: 100%; }

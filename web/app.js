@@ -5,7 +5,12 @@
     fetch("data/phase1.json").then(r => r.json()),
     fetch("data/phase2.json").then(r => r.json()).catch(() => null),
   ]);
-  const ME = league.me.owner_key;
+  // Highlighted franchise: chosen by each viewer (?team=<id> or the picker); none by default.
+  const franchises = p1.all_time.map(r => ({ key: r.owner_key, name: r.franchise }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  const validKey = k => franchises.some(f => f.key === k) ? k : null;
+  let SEL = validKey(new URLSearchParams(location.search).get("team"));
+  if (!SEL) { try { SEL = validKey(localStorage.getItem("ffdash.team")); } catch (e) {} }
   const years = Object.keys(p1.seasons).map(Number).sort((a, b) => b - a);
   const cov = Object.fromEntries(league.coverage.map(c => [c.year, c]));
   const $ = s => document.querySelector(s);
@@ -62,7 +67,7 @@
       }
       el.innerHTML =
         "<thead><tr>" + cols.map(c => `<th class="${c.l ? "l" : ""}" data-k="${c.key}" ${opts.sortable !== false && sortKey === c.key ? `aria-sort="${dir > 0 ? "ascending" : "descending"}"` : ""}>${c.label}</th>`).join("") + "</tr></thead>" +
-        "<tbody>" + data.map(r => `<tr class="${r.owner_key === ME ? "me" : ""}">` + cols.map(c => `<td class="${c.cls || (c.l ? "l" : "")}">${c.fmt ? c.fmt(r) : esc(r[c.key])}</td>`).join("") + "</tr>").join("") + "</tbody>";
+        "<tbody>" + data.map(r => `<tr class="${SEL && (opts.rowKey ? opts.rowKey(r) : r.owner_key) === SEL ? "me" : ""}">` + cols.map(c => `<td class="${c.cls || (c.l ? "l" : "")}">${c.fmt ? c.fmt(r) : esc(r[c.key])}</td>`).join("") + "</tr>").join("") + "</tbody>";
       if (el.classList.contains("sortable")) {
         el.querySelectorAll("th").forEach(th => th.addEventListener("click", () => {
           const k = th.dataset.k;
@@ -73,7 +78,9 @@
     }
     draw();
   }
-  const teamCell = r => `${esc(r.name)}<div class="owner">${esc(r.owner)}</div>`;
+  // Season team name, plus the franchise's current name when it has changed since.
+  const now = r => r.franchise && r.franchise !== r.name ? `<div class="owner">now ${esc(r.franchise)}</div>` : "";
+  const teamCell = r => `${esc(r.name)}${now(r)}`;
 
   // ---------- horizontal bar chart (diverging when values can be negative) ----------
   addEventListener("resize", () => charts.forEach(([el, items, o]) => el.offsetParent && hbar(el, items, o, true)));
@@ -108,7 +115,7 @@
         ? `M${b},${by} H${a + r} Q${a},${by} ${a},${by + r} V${by + bh - r} Q${a},${by + bh} ${a + r},${by + bh} H${b} Z`
         : `M${a},${by} H${b - r} Q${b},${by} ${b},${by + r} V${by + bh - r} Q${b},${by + bh} ${b - r},${by + bh} H${a} Z`;
       const cls = min < 0 ? (neg ? "bar-neg" : "bar-pos") : "bar";
-      const me = it.owner_key === ME;
+      const me = SEL && it.owner_key === SEL;
       svg += `<g class="row" data-i="${i}"><rect class="hl" x="0" y="${y}" width="${W}" height="${rowH}" fill="transparent"/>`;
       const maxCh = Math.floor(labelW / 7);
       svg += `<text x="${labelW - 8}" y="${y + rowH / 2 + 4}" text-anchor="end" class="${me ? "me" : ""}">${esc(it.label.length > maxCh ? it.label.slice(0, maxCh - 1) + "…" : it.label)}</text>`;
@@ -126,34 +133,73 @@
   }
 
   // ---------- overview ----------
-  const meAll = p1.all_time.find(r => r.owner_key === ME);
   const curYear = league.current_season;
-  const meCur = p1.seasons[curYear]?.standings.find(r => r.owner_key === ME);
-  if (meAll) {
-    const tiles = [
-      ["Titles", meAll.titles, `${meAll.runner_ups} runner-up · ${meAll.playoffs} playoff trips`],
-      ["All-time record", rec(meAll.w, meAll.l, meAll.t), `${pct(meAll.pct)} · all-play ${pct(meAll.ap_pct)}`],
-      ["Career luck", signed(meAll.luck, 1), "wins vs all-play expectation"],
-      ["Bench points left", meAll.regret_pts == null ? "–" : Math.round(meAll.regret_pts).toLocaleString(), `${meAll.regret_losses ?? "–"} games cost by lineup`],
-    ];
-    if (meCur) tiles.unshift([`${curYear} so far`, rec(meCur.w, meCur.l, meCur.t), `#${meCur.h2h_rank} H2H · #${meCur.ap_rank} all-play · luck ${signed(meCur.luck, 1)}`]);
-    $("#me-card").innerHTML = `<div class="tile" style="grid-column:1/-1;padding:8px 14px"><b>${esc(league.me.name)}</b> <span class="owner">· ${esc(meAll.owner)} (you)</span></div>` +
-      tiles.map(([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+  const tile = ([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
+  function renderOverview() {
+    const f = SEL && p1.all_time.find(r => r.owner_key === SEL);
+    let tiles, h2hRows = null;
+    if (f) {
+      const cur = p1.seasons[curYear]?.standings.find(r => r.owner_key === SEL);
+      const won = p1.champions.filter(c => c.champion && c.champion.owner_key === SEL).map(c => c.year);
+      const fname = Object.fromEntries(p1.all_time.map(r => [r.owner_key, r.franchise]));
+      const h2h = Object.entries(p1.head_to_head?.[SEL] || {}).map(([k, r]) => {
+        const g = r.w + r.l + r.t;
+        return { opp: fname[k] || "Unknown", owner_key: k, g, pct: g ? (r.w + 0.5 * r.t) / g : 0, ...r };
+      });
+      const ranked = h2h.filter(r => r.g >= 3).sort((a, b) => b.pct - a.pct || b.g - a.g);
+      const bestM = ranked[0], worstM = ranked[ranked.length - 1];
+      const mtile = (label, m) => [label, m ? rec(m.w, m.l, m.t) : "–", m ? `vs ${esc(m.opp)}` : "needs 3+ games vs one team"];
+      tiles = [
+        ["Titles", f.titles, won.length ? won.join(", ") : `${f.runner_ups} runner-up finish${f.runner_ups === 1 ? "" : "es"}`],
+        ["Total wins", f.w, `${f.seasons} season${f.seasons === 1 ? "" : "s"}, regular season`],
+        ["Total losses", f.l, f.t ? `${f.t} tie${f.t === 1 ? "" : "s"} · ${pct(f.pct)} win %` : `${pct(f.pct)} win %`],
+        ["Total points scored", Math.round(f.pf).toLocaleString(), "regular season"],
+        ["Total bench points", f.bench_pts == null ? "–" : Math.round(f.bench_pts).toLocaleString(), f.regret_pts == null ? "" : `${Math.round(f.regret_pts).toLocaleString()} should have started`],
+        mtile("Best matchup", bestM),
+        mtile("Worst matchup", worstM),
+        ["Career luck", signed(f.luck, 1), "wins vs all-play expectation"],
+      ];
+      h2hRows = h2h;
+      if (cur) tiles.unshift([`${curYear} so far`, rec(cur.w, cur.l, cur.t), `#${cur.h2h_rank} H2H · #${cur.ap_rank} all-play · luck ${signed(cur.luck, 1)}`]);
+    } else {
+      const at = p1.all_time;
+      const most = at.slice().sort((a, b) => b.titles - a.titles || b.pct - a.pct)[0];
+      const best = at.filter(r => r.seasons >= 3).sort((a, b) => b.pct - a.pct)[0];
+      const lucky = at.slice().sort((a, b) => b.luck - a.luck)[0];
+      const champs = p1.champions.filter(c => c.champion).length;
+      tiles = [
+        ["Seasons", years.length, `${champs} champions crowned`],
+        ["Most titles", most.titles, esc(most.franchise)],
+        ["Best all-time record", best ? pct(best.pct) : "–", best ? esc(best.franchise) : ""],
+        ["Luckiest franchise", signed(lucky.luck, 1), esc(lucky.franchise)],
+      ];
+    }
+    $("#me-card").innerHTML = tiles.map(tile).join("");
+    $("#h2h-wrap").hidden = !h2hRows;
+    if (h2hRows) {
+      $("#h2h-title").textContent = "Head-to-head: " + f.franchise;
+      table($("#h2h"), [
+        { key: "opp", label: "Opponent", l: true, fmt: r => esc(r.opp), sort: r => r.opp.toLowerCase(), asc: true },
+        { key: "pct", label: "Record", fmt: r => `${rec(r.w, r.l, r.t)} <span class="owner">${pct(r.pct)}</span>` },
+        { key: "g", label: "Games" },
+        { key: "pf", label: "Pts for", fmt: r => num(r.pf, 0) },
+        { key: "pa", label: "Pts against", fmt: r => num(r.pa, 0) },
+      ], h2hRows, { sort: "pct", rowKey: () => null });
+    }
   }
-  const who = x => x ? `${esc(x.name)}<div class="owner">${esc(x.owner)}</div>` : '<span class="na">–</span>';
-  table($("#champs"), [
-    { key: "year", label: "Season", l: true, fmt: r => r.year + (r.in_progress ? ' <span class="flag">in progress</span>' : "") },
-    { key: "champion", label: "Champion", l: true, fmt: r => who(r.champion) },
-    { key: "runner_up", label: "Runner-up", l: true, fmt: r => who(r.runner_up) },
-    { key: "reg", label: "Best regular season", l: true, fmt: r => r.reg_season_best ? `${who(r.reg_season_best)}` : "–" },
-    { key: "pf", label: "Most points", l: true, fmt: r => r.top_pf ? `${who(r.top_pf)}` : "–" },
-    { key: "last", label: "Last place", l: true, fmt: r => who(r.last_place) },
-  ], p1.champions.slice().sort((a, b) => b.year - a.year), { sortable: false });
-  // champions table rows are seasons; highlight rows I won
-  $("#champs").querySelectorAll("tbody tr").forEach((tr, i) => {
-    const c = p1.champions.slice().sort((a, b) => b.year - a.year)[i];
-    if (c.champion && c.champion.owner_key === ME) tr.classList.add("me");
-  });
+  const who = x => x ? `${esc(x.name)}${now(x)}` : '<span class="na">–</span>';
+  function renderChamps() {
+    table($("#champs"), [
+      { key: "year", label: "Season", l: true, fmt: r => r.year + (r.in_progress ? ' <span class="flag">in progress</span>' : "") },
+      { key: "champion", label: "Champion", l: true, fmt: r => who(r.champion) },
+      { key: "runner_up", label: "Runner-up", l: true, fmt: r => who(r.runner_up) },
+      { key: "reg", label: "Best regular season", l: true, fmt: r => who(r.reg_season_best) },
+      { key: "pf", label: "Most points", l: true, fmt: r => who(r.top_pf) },
+      { key: "last", label: "Last place", l: true, fmt: r => who(r.last_place) },
+    ], p1.champions.slice().sort((a, b) => b.year - a.year),
+    // Only the picked franchise's title-winning seasons are highlighted.
+    { sortable: false, rowKey: c => c.champion && c.champion.owner_key });
+  }
 
   // Banner only for genuinely missing data; smaller discrepancies stay on the Data notes tab and per-tab flags.
   const flagged = league.coverage.filter(c => !c.available || !c.scores || !c.lineups || c.transactions === false);
@@ -193,7 +239,7 @@
       .map(r => ({ label: r.name, value: r.luck, owner_key: r.owner_key, r }));
     hbar($("#luck-chart"), luck, {
       fmt: v => signed(v, 1),
-      tipFn: it => `<b>${esc(it.r.name)}</b> <span class="m">${esc(it.r.owner)}</span><br>Actual ${rec(it.r.w, it.r.l, it.r.t)} · expected ${it.r.exp_w.toFixed(1)} wins<br>Luck ${signed(it.value, 2)}`,
+      tipFn: it => `<b>${esc(it.r.name)}</b><br>Actual ${rec(it.r.w, it.r.l, it.r.t)} · expected ${it.r.exp_w.toFixed(1)} wins<br>Luck ${signed(it.value, 2)}`,
     });
     const arrow = (a, b) => a === b ? "" : `<span class="owner"> (${a > b ? "▲" : "▼"}${Math.abs(a - b)})</span>`;
     table($("#formats"), [
@@ -204,11 +250,11 @@
     ], s.standings, { sort: "h2h_rank", dir: 1, sortable: false });
   }
   fillSelect($("#season-select"), renderSeason);
-  renderSeason(years[0]);
 
   // ---------- all-time ----------
+  function renderAlltime() {
   table($("#alltime"), [
-    { key: "owner", label: "Owner", l: true, sort: r => r.owner.toLowerCase(), asc: true },
+    { key: "franchise", label: "Franchise", l: true, fmt: r => esc(r.franchise), sort: r => r.franchise.toLowerCase(), asc: true },
     { key: "seasons", label: "Seasons" },
     { key: "titles", label: "Titles" },
     { key: "runner_ups", label: "2nd" },
@@ -221,10 +267,11 @@
     { key: "regret_pts", label: "Bench pts", fmt: r => r.regret_pts == null ? "–" : Math.round(r.regret_pts).toLocaleString() },
     { key: "last_places", label: "Last" },
   ], p1.all_time, { sort: "titles" });
-  hbar($("#career-luck"), p1.all_time.slice().sort((a, b) => b.luck - a.luck).map(r => ({ label: r.owner, value: r.luck, owner_key: r.owner_key, r })), {
+  hbar($("#career-luck"), p1.all_time.slice().sort((a, b) => b.luck - a.luck).map(r => ({ label: r.franchise, value: r.luck, owner_key: r.owner_key, r })), {
     fmt: v => signed(v, 1),
-    tipFn: it => `<b>${esc(it.r.owner)}</b><br>${it.r.seasons} seasons · ${rec(it.r.w, it.r.l, it.r.t)}<br>Luck ${signed(it.value, 2)} wins`,
+    tipFn: it => `<b>${esc(it.r.franchise)}</b><br>${it.r.seasons} seasons · ${rec(it.r.w, it.r.l, it.r.t)}<br>Luck ${signed(it.value, 2)} wins`,
   });
+  }
 
   // ---------- regret ----------
   function renderRegret(y) {
@@ -234,7 +281,7 @@
     if (!rows.length) { $("#regret-chart").innerHTML = empty; $("#regret-table").innerHTML = ""; $("#blunders").innerHTML = ""; return; }
     hbar($("#regret-chart"), rows.slice().sort((a, b) => b.regret_pts - a.regret_pts).map(r => ({ label: r.name, value: r.regret_pts, owner_key: r.owner_key, r })), {
       fmt: v => v.toFixed(0),
-      tipFn: it => `<b>${esc(it.r.name)}</b> <span class="m">${esc(it.r.owner)}</span><br>${it.r.regret_pts.toFixed(1)} pts left on bench<br>${it.r.regret_losses} games cost · ${(it.r.efficiency * 100).toFixed(1)}% efficient`,
+      tipFn: it => `<b>${esc(it.r.name)}</b><br>${it.r.regret_pts.toFixed(1)} pts left on bench<br>${it.r.regret_losses} games cost · ${(it.r.efficiency * 100).toFixed(1)}% efficient`,
     });
     table($("#regret-table"), [
       { key: "name", label: "Team", l: true, fmt: teamCell },
@@ -254,12 +301,11 @@
     ], s.blunders.slice(0, 15).map(b => ({ ...b, owner_key: owners[b.team_id]?.owner_key })), { sortable: false });
   }
   fillSelect($("#regret-select"), renderRegret);
-  renderRegret(years[0]);
 
   // ---------- waivers ----------
   if (p2) {
     const money = v => v == null ? '<span class="na">–</span>' : "$" + v;
-    const playerCell = a => `${esc(a.player)}<div class="owner">${esc(a.team)}${a.owner ? " · " + esc(a.owner) : ""}</div>`;
+    const playerCell = a => `${esc(a.player)}<div class="owner">${esc(a.team)}</div>`;
     const wk = a => a.sp ? `wk ${a.sp}` : "preseason";
     const wYears = Object.keys(p2.seasons).map(Number).sort((a, b) => b - a);
     function renderWaivers(y) {
@@ -270,7 +316,7 @@
       flag.hidden = !msgs.length; flag.textContent = msgs.join(" · ");
       hbar($("#waiver-chart"), w.teams.map(t => ({ label: t.name, value: t.started_pts, owner_key: t.owner_key, t })), {
         fmt: v => Math.round(v),
-        tipFn: it => `<b>${esc(it.t.name)}</b> <span class="m">${esc(it.t.owner)}</span><br>${it.t.adds} adds · ${it.t.started_pts.toFixed(0)} started pts<br>Best: ${esc(it.t.best || "–")}`,
+        tipFn: it => `<b>${esc(it.t.name)}</b><br>${it.t.adds} adds · ${it.t.started_pts.toFixed(0)} started pts<br>Best: ${esc(it.t.best || "–")}`,
       });
       const cols = [
         { key: "name", label: "Team", l: true, fmt: teamCell, sort: r => r.name.toLowerCase(), asc: true },
@@ -320,9 +366,8 @@
     const sel = $("#waiver-select");
     sel.innerHTML = wYears.map(y => `<option>${y}</option>`).join("");
     sel.addEventListener("change", () => renderWaivers(+sel.value));
-    renderWaivers(wYears[0]);
-    table($("#waiver-alltime"), [
-      { key: "owner", label: "Owner", l: true, sort: r => r.owner.toLowerCase(), asc: true },
+    var renderWaiverAll = () => { renderWaivers(+sel.value); table($("#waiver-alltime"), [
+      { key: "franchise", label: "Franchise", l: true, fmt: r => esc(r.franchise), sort: r => r.franchise.toLowerCase(), asc: true },
       { key: "seasons", label: "Seasons" },
       { key: "adds", label: "Adds" },
       { key: "started_pts", label: "Started pts", fmt: r => Math.round(r.started_pts).toLocaleString() },
@@ -331,10 +376,32 @@
       { key: "faab_spent", label: "FAAB", fmt: r => money(r.faab_spent) },
       { key: "pts_per_dollar", label: "Pts/$", fmt: r => num(r.pts_per_dollar, 2) },
       { key: "overpaid", label: "Overpaid", fmt: r => money(r.overpaid) },
-    ], p2.all_time, { sort: "started_pts" });
+    ], p2.all_time, { sort: "started_pts" }); };
   } else {
     document.querySelector('[data-tab="waivers"]').hidden = true;
   }
+
+  // ---------- team picker ----------
+  const picker = $("#team-picker");
+  picker.innerHTML = '<option value="">All teams (no highlight)</option>' +
+    franchises.map(f => `<option value="${esc(f.key)}">${esc(f.name)}</option>`).join("");
+  picker.value = SEL || "";
+  function renderAll() {
+    renderOverview(); renderChamps(); renderAlltime();
+    renderSeason(+$("#season-select").value); renderRegret(+$("#regret-select").value);
+    if (p2) renderWaiverAll();
+  }
+  picker.addEventListener("change", () => {
+    SEL = picker.value || null;
+    try { SEL ? localStorage.setItem("ffdash.team", SEL) : localStorage.removeItem("ffdash.team"); } catch (e) {}
+    try {
+      const u = new URL(location.href);
+      SEL ? u.searchParams.set("team", SEL) : u.searchParams.delete("team");
+      history.replaceState(null, "", u);
+    } catch (e) {}
+    renderAll();
+  });
+  renderAll();
 
   // ---------- data notes ----------
   const yn = v => v ? '<span class="yes">yes</span>' : '<span class="no">missing</span>';
@@ -343,7 +410,7 @@
     { key: "available", label: "Season", fmt: c => yn(c.available) },
     { key: "scores", label: "Scores", fmt: c => yn(c.scores) },
     { key: "lineups", label: "Lineups", fmt: c => c.lineup_periods_expected ? `${yn(c.lineups)} <span class="owner">${c.lineup_periods}/${c.lineup_periods_expected} wks</span>` : yn(c.lineups) },
-    { key: "owners", label: "Owners", fmt: c => yn(c.owners) },
+    { key: "owners", label: "Managers", fmt: c => yn(c.owners) },
     { key: "transactions", label: "Waivers", fmt: c => c.transactions == null ? "–" : `${yn(c.transactions)}${c.transactions && !c.faab ? ' <span class="owner">no FAAB</span>' : ""}` },
     { key: "notes", label: "Missing data", cls: "wrapcell", fmt: c => esc((c.notes || []).join(" ")) || '<span class="na">none</span>' },
     { key: "changes", label: "League changes", cls: "wrapcell", fmt: c => esc((c.changes || []).join(" ")) },

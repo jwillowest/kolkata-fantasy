@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "dashboard",
-      "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["-m", "http.server", "8765", "--directory", "site", "--bind", "127.0.0.1"],
-      "port": 8765
+      "name": "site",
+      "runtimeExecutable": "/Users/j.j.west/Documents/ff-dashboard/.venv/bin/python",
+      "runtimeArgs": ["-m", "http.server", "8766", "--directory", "/Users/j.j.west/Documents/ff-dashboard/site", "--bind", "127.0.0.1"],
+      "port": 8766
     }
   ]
 }

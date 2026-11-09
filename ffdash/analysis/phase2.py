@@ -65,7 +65,7 @@ def season_waivers(season: dict) -> dict | None:
             bid = t["bid"] if faab else None
             adds.append({
                 "year": season["year"], "team_id": tid, "team": teams.get(tid, {}).get("name", f"Team {tid}"),
-                "owner": teams.get(tid, {}).get("owner"), "owner_key": teams.get(tid, {}).get("owner_key"),
+                "franchise": teams.get(tid, {}).get("franchise"), "owner_key": teams.get(tid, {}).get("owner_key"),
                 "pid": pid, "player": names.get(pid, f"Player {pid}"), "sp": t["sp"], "type": t["type"],
                 "bid": bid, "next_bid": next_bid if faab else None, "bidders": 1 + len(others),
                 "overpay": (bid - (next_bid or 0)) if faab and bid else None,
@@ -82,7 +82,7 @@ def season_waivers(season: dict) -> dict | None:
         pts = sum(a["started_pts"] for a in mine)
         paid = [a for a in mine if a["bid"]]
         by_team.append({
-            "team_id": tid, "name": tm["name"], "owner": tm.get("owner"), "owner_key": tm.get("owner_key"),
+            "team_id": tid, "name": tm["name"], "franchise": tm.get("franchise"), "owner_key": tm.get("owner_key"),
             "adds": len(mine), "faab_spent": spent if faab else None,
             "started_pts": round(pts, 1),
             "pts_per_add": round(pts / len(mine), 2) if mine else None,
@@ -109,20 +109,20 @@ def season_waivers(season: dict) -> dict | None:
 
 
 def build(seasons: list[dict]) -> dict:
-    """Expects phase1.resolve_identities() to have set owner_key/owner on teams."""
+    """Expects phase1.resolve_identities() to have set owner_key/franchise on teams."""
     out = {s["year"]: w for s in seasons if (w := season_waivers(s))}
     agg = defaultdict(lambda: defaultdict(float))
     names, years = {}, defaultdict(set)
     for w in out.values():
         for t in w["teams"]:
-            a = agg[t["owner_key"]]; names[t["owner_key"]] = t["owner"]
+            a = agg[t["owner_key"]]; names[t["owner_key"]] = t["franchise"]
             years[t["owner_key"]].add(w["year"]); a["adds"] += t["adds"]; a["started_pts"] += t["started_pts"]; a["hits"] += t["hits"]
             if w["faab"]:
                 a["faab_spent"] += t["faab_spent"] or 0
                 a["faab_pts"] += t["faab_pts"]
                 a["overpaid"] += t["overpaid"] or 0
     rows = [{
-        "owner_key": k, "owner": names[k], "seasons": len(years[k]), "adds": int(a["adds"]),
+        "owner_key": k, "franchise": names[k], "seasons": len(years[k]), "adds": int(a["adds"]),
         "started_pts": round(a["started_pts"], 1),
         "pts_per_add": round(a["started_pts"] / a["adds"], 2) if a["adds"] else None,
         "faab_spent": int(a["faab_spent"]),

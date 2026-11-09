@@ -76,7 +76,6 @@ def main() -> None:
     if not seasons:
         raise SystemExit("No season data.")
     cur = next((s for s in seasons if s["year"] == current), seasons[-1])
-    me = next((t for t in cur["teams"] if t["team_id"] == my_team), None)
 
     p1 = phase1.build(seasons)  # also sets hashed owner_key on every team
     p2 = phase2.build(seasons)
@@ -85,8 +84,6 @@ def main() -> None:
         "name": cur["settings"]["name"],
         "current_season": current,
         "seasons": [s["year"] for s in seasons],
-        "me": {"team_id": my_team, "owner_key": phase1.owner_key(me) if me else None,
-               "name": me["name"] if me else None},
         "generated_at": int(time.time()),
         "coverage": _coverage(seasons, missing, gaps),
     }

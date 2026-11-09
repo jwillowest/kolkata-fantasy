@@ -30,10 +30,19 @@
 </section>
 
 <main class="wrap">
+  <div class="picker-row">
+    <label for="team-picker">Highlight a team</label>
+    <select id="team-picker"></select>
+  </div>
   <div id="coverage-banner" class="banner" hidden></div>
 
   <section id="tab-overview" class="tab">
     <div id="me-card" class="tiles"></div>
+    <div id="h2h-wrap" hidden>
+      <h2 id="h2h-title">Head-to-head</h2>
+      <p class="hint">Regular season, all seasons. Best and worst matchups need at least 3 games against that franchise.</p>
+      <div class="table-wrap"><table id="h2h" class="sortable"></table></div>
+    </div>
     <h2>Champions</h2>
     <div class="table-wrap"><table id="champs"></table></div>
   </section>
