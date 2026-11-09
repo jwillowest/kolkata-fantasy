@@ -19,6 +19,7 @@
       <button role="tab" data-tab="alltime">All-time</button>
       <button role="tab" data-tab="regret">Start/Sit</button>
       <button role="tab" data-tab="waivers">Waivers</button>
+      <button role="tab" data-tab="draft">Draft vs ADP</button>
       <button role="tab" data-tab="data">Data notes</button>
     </nav>
   </div>
@@ -33,7 +34,11 @@
   <div class="picker-row">
     <label for="team-picker">Select your team</label>
     <select id="team-picker"></select>
+    <label class="toggle" title="Show each number as a percentile against every team-season in league history">
+      <input type="checkbox" id="pct-toggle"> <span>Percentiles</span>
+    </label>
   </div>
+  <p id="pct-hint" class="hint" hidden>Percentiles: P90 = better than 90% of team-seasons in league history (or of franchises, on all-time tables). Counting stats are compared per game so a season in progress compares fairly. Hover a cell for the raw number.</p>
   <div id="coverage-banner" class="banner" hidden></div>
 
   <section id="tab-overview" class="tab">
@@ -118,6 +123,36 @@
     <h2>All-time waiver wire</h2>
     <p class="hint">Points per $ uses FAAB seasons only.</p>
     <div class="table-wrap"><table id="waiver-alltime" class="sortable"></table></div>
+  </section>
+
+  <section id="tab-draft" class="tab" hidden>
+    <div class="controls">
+      <label>Season <select id="draft-select"></select></label>
+      <span id="draft-flag" class="flag" hidden></span>
+    </div>
+    <h2>Draft vs ADP</h2>
+    <p class="hint">ADP = FantasyPros expert consensus rank just before our draft (PPR; we score half-PPR). Points = regular-season fantasy points in our scoring, wherever the player ended up.
+      <b>Steal / reach</b> = ADP minus pick: + means taken later than consensus (D/ST, K and keepers left out).
+      <b>Pick value</b> = points minus what that slot usually returns at the position: the 5th RB taken is measured against what consensus RB3–RB7 scored that season.
+      <b>Beat ADP</b> = share of picks who outscored what their ADP implied.</p>
+    <div class="grid2">
+      <div class="card"><h3>Draft value by team</h3><div id="draft-chart" class="chart"></div></div>
+      <div class="card"><h3>By team</h3><div class="table-wrap"><table id="draft-teams" class="sortable"></table></div></div>
+    </div>
+    <div class="grid2">
+      <div><h3 style="margin-top:24px">Most valuable picks</h3><div class="table-wrap"><table id="best-picks"></table></div></div>
+      <div><h3 style="margin-top:24px">Least valuable picks</h3><div class="table-wrap"><table id="worst-picks"></table></div></div>
+    </div>
+    <div class="grid2">
+      <div><h3 style="margin-top:24px">Biggest steals</h3><div class="table-wrap"><table id="steals"></table></div></div>
+      <div><h3 style="margin-top:24px">Biggest reaches</h3><div class="table-wrap"><table id="reaches"></table></div></div>
+    </div>
+    <h2 id="board-title">Draft board</h2>
+    <p class="hint" id="board-hint"></p>
+    <div class="table-wrap board"><table id="board" class="sortable"></table></div>
+    <h2>All-time draft record</h2>
+    <p class="hint">Finished seasons with FantasyPros consensus. Draft value per draft = average total pick value per season.</p>
+    <div class="table-wrap"><table id="draft-alltime" class="sortable"></table></div>
   </section>
 
   <section id="tab-data" class="tab" hidden>

@@ -7,6 +7,7 @@ Weekly lineups are read from the raw mBoxscore view so pre-2019 seasons are atte
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 import logging
 import time
 from pathlib import Path
@@ -18,7 +19,7 @@ from .config import ROOT, Config
 
 log = logging.getLogger(__name__)
 RAW_DIR = ROOT / "data" / "raw"
-CACHE_VERSION = 3  # bump when the normalized shape changes, to force a refetch
+CACHE_VERSION = 4  # bump when the normalized shape changes, to force a refetch
 BENCH_SLOTS = {20, 21}  # BE, IR
 DEFAULT_POS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "D/ST"}  # player.defaultPositionId
 
@@ -139,6 +140,45 @@ def _transactions(league: League, last_period: int) -> list[dict]:
     return out
 
 
+def _player_rows(players: list, year: int) -> dict:
+    out = {}
+    for pl in players:
+        p = pl.get("player", pl)
+        wk = defaultdict(float)
+        for st in p.get("stats", []):
+            if st.get("seasonId") == year and st.get("statSourceId") == 0 and st.get("statSplitTypeId") == 1:
+                wk[st["scoringPeriodId"]] += st.get("appliedTotal", 0) or 0
+        out[p["id"]] = {
+            "name": p.get("fullName", ""),
+            "pos": DEFAULT_POS.get(p.get("defaultPositionId")) or _main_pos(p.get("eligibleSlots", [])),
+            "pro_team": p.get("proTeamId"),
+            "espn_adp": (p.get("ownership") or {}).get("averageDraftPosition"),
+            "wk": {sp: round(v, 2) for sp, v in sorted(wk.items())},
+        }
+    return out
+
+
+def _draft(league: League, year: int, final_period: int) -> tuple[list, dict]:
+    """Draft picks plus weekly league-scoring points for the season's top 400 scorers and every drafted player."""
+    d = _get(league, params={"view": "mDraftDetail"}).get("draftDetail", {})
+    if not d.get("drafted"):
+        return [], {}
+    picks = [{
+        "overall": p.get("overallPickNumber") or i + 1, "round": p.get("roundId"), "round_pick": p.get("roundPickNumber"),
+        "team": p.get("teamId"), "pid": p.get("playerId"), "keeper": bool(p.get("keeper")),
+    } for i, p in enumerate(d.get("picks", []))]
+    stat_filter = {"value": final_period, "additionalValue": [f"00{year}", f"10{year}"]}
+    top = _get(league, params={"view": "kona_player_info", "scoringPeriodId": 0}, headers={"x-fantasy-filter": json.dumps(
+        {"players": {"limit": 400, "sortAppliedStatTotal": {"sortAsc": False, "sortPriority": 1, "value": f"00{year}"},
+                     "filterStatsForTopScoringPeriodIds": stat_filter}})})
+    players = _player_rows(top.get("players", []), year)
+    missing = [p["pid"] for p in picks if p["pid"] not in players]
+    for i in range(0, len(missing), 50):
+        card = league.espn_request.get_player_card(missing[i:i + 50], final_period)
+        players.update(_player_rows(card.get("players", []), year))
+    return picks, players
+
+
 def _main_pos(slots: list[int]) -> str:
     for s in slots:
         name = POSITION_MAP.get(s, "")
@@ -165,6 +205,7 @@ def fetch_season(cfg: Config, year: int) -> dict:
     owners = _owner_ids(lg)
     tx_last = max(scoring_periods) if scoring_periods else 0
     transactions = _transactions(lg, tx_last + 1 if year == cfg.current_season else tx_last)
+    picks, draft_players = _draft(lg, year, lg.finalScoringPeriod)
     tx_pids = {pid for t in transactions for pid in t["adds"] + t["drops"]}
     player_names = {pid: lg.player_map.get(pid) for pid in tx_pids if isinstance(lg.player_map.get(pid), str)}
     divisions = {}
@@ -178,6 +219,7 @@ def fetch_season(cfg: Config, year: int) -> dict:
         "lineup_periods_expected": len(scoring_periods),
         "owners": bool(owners),
         "transactions": bool(transactions),
+        "draft": bool(picks),
         "faab": bool(s.faab),
         "notes": [],
     }
@@ -214,6 +256,11 @@ def fetch_season(cfg: Config, year: int) -> dict:
         "lineups": lineups,
         "transactions": transactions,
         "player_names": player_names,
+        "draft": picks,
+        "players": draft_players,
+        "draft_date": _get(lg, params={"view": "mDraftDetail"}).get("draftDetail", {}).get("completeDate"),
+        "rec_points": next((i.get("points") for i in _get(lg, params={"view": "mSettings"}).get("settings", {})
+                            .get("scoringSettings", {}).get("scoringItems", []) if i.get("statId") == 53), 0),
         "coverage": coverage,
         "_previous_seasons": lg.previousSeasons,
     }

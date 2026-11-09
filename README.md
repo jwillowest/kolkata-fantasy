@@ -12,7 +12,7 @@ Libraries (pip, not forks): [espn_api](https://github.com/cwendt94/espn-api) for
    all-play expected wins), median-format record, start/sit regret (best hindsight lineup minus
    lineup used), champions by season, all-time owner table.
 2. **Waivers** (done): started points per add, points per FAAB dollar, overpay vs next-highest bid, best pickups, busts, all-time waiver table.
-3. Draft vs ADP using nflreadpy FantasyPros rankings. *(planned)*
+3. **Draft vs ADP** (done): FantasyPros consensus (nflreadpy) vs our picks and regular-season points; steals, reaches, most/least valuable picks, draft boards, all-time draft record.
 4. Schedule and division simulations. *(planned)*
 
 ## Local use

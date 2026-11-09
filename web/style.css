@@ -112,3 +112,10 @@ a { color: var(--text); }
 .picker-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
 .picker-row label { font-family: var(--display); text-transform: uppercase; font-size: 15px; }
 .picker-row select { min-width: 0; max-width: 100%; }
+
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; margin-left: auto; }
+.toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+.pc { font-weight: 600; }
+.pc.hi { color: #0a7a2f; } .pc.lo { color: #b3261e; }
+.board { max-height: 640px; overflow: auto; }
+td .tag { display: inline-block; font-size: 11px; padding: 0 5px; border-radius: 4px; background: var(--grid); color: var(--text-2); margin-left: 4px; }

@@ -1,28 +1,36 @@
 "use strict";
 (async function () {
-  const [league, p1, p2] = await Promise.all([
-    fetch("data/league.json").then(r => r.json()),
-    fetch("data/phase1.json").then(r => r.json()),
-    fetch("data/phase2.json").then(r => r.json()).catch(() => null),
+  const get = f => fetch("data/" + f).then(r => r.json());
+  const [league, p1, p2, p3] = await Promise.all([
+    get("league.json"), get("phase1.json"), get("phase2.json").catch(() => null), get("phase3.json").catch(() => null),
   ]);
-  // Highlighted franchise: chosen by each viewer (?team=<id> or the picker); none by default.
-  const franchises = p1.all_time.map(r => ({ key: r.owner_key, name: r.franchise }))
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-  const validKey = k => franchises.some(f => f.key === k) ? k : null;
-  let SEL = validKey(new URLSearchParams(location.search).get("team"));
-  if (!SEL) { try { SEL = validKey(localStorage.getItem("ffdash.team")); } catch (e) {} }
+  const ALL = "all";
   const years = Object.keys(p1.seasons).map(Number).sort((a, b) => b - a);
   const cov = Object.fromEntries(league.coverage.map(c => [c.year, c]));
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const num = (v, d = 1) => v == null ? '<span class="na">–</span>' : Number(v).toFixed(d);
-  const signed = (v, d = 2) => v == null ? '<span class="na">–</span>' : (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
+  const NA = '<span class="na">–</span>';
+  const num = (v, d = 1) => v == null || Number.isNaN(v) ? NA : Number(v).toFixed(d);
+  const int = v => v == null ? NA : Math.round(v).toLocaleString();
+  const signed = (v, d = 2) => v == null ? NA : (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
   const rec = (w, l, t) => `${w | 0}-${l | 0}${t ? "-" + (t | 0) : ""}`;
   const pct = v => v == null ? "–" : v.toFixed(3).replace(/^0/, "");
+  const money = v => v == null ? NA : "$" + v;
+  const sum = (a, f) => a.reduce((s, x) => s + (f(x) || 0), 0);
 
   document.title = league.name + " Analytics";
   $("#logo").textContent = league.name;
   $("#updated").textContent = `Seasons ${Math.min(...years)}–${Math.max(...years)} · updated ${new Date(league.generated_at * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
+
+  // ---------- viewer state: highlighted team + percentile mode (per viewer, nothing by default) ----------
+  const store = { get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+                  set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} } };
+  const franchises = p1.all_time.map(r => ({ key: r.owner_key, name: r.franchise }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  const validKey = k => franchises.some(f => f.key === k) ? k : null;
+  let SEL = validKey(new URLSearchParams(location.search).get("team")) || validKey(store.get("ffdash.team"));
+  let PCT = store.get("ffdash.pct") === "1";
+  const fname = Object.fromEntries(franchises.map(f => [f.key, f.name]));
 
   const charts = [];
   // ---------- tabs ----------
@@ -31,15 +39,12 @@
     tabs.forEach(b => b.setAttribute("aria-selected", b.dataset.tab === name));
     document.querySelectorAll(".tab").forEach(s => (s.hidden = s.id !== "tab-" + name));
     charts.forEach(([el, items, o]) => el.offsetParent && hbar(el, items, o, true));
-    try { history.replaceState(null, "", "#" + name); } catch (e) {}
+    try { history.replaceState(null, "", location.search + "#" + name); } catch (e) {}
   }
   tabs.forEach(b => b.addEventListener("click", () => show(b.dataset.tab)));
   const initial = location.hash.slice(1);
   if (tabs.some(b => b.dataset.tab === initial)) show(initial);
-  addEventListener("hashchange", () => {
-    const h = location.hash.slice(1);
-    if (tabs.some(b => b.dataset.tab === h)) show(h);
-  });
+  addEventListener("hashchange", () => { const h = location.hash.slice(1); if (tabs.some(b => b.dataset.tab === h)) show(h); });
 
   // ---------- tooltip ----------
   const tip = $("#tip");
@@ -51,9 +56,31 @@
   }
   const tipOff = () => (tip.hidden = true);
 
+  // ---------- percentiles ----------
+  // Column option `pv: row => number` (a rate, so seasons of different lengths compare) and `low: true`
+  // when lower is better. Percentile = share of the comparison pool this value beats (ties count half).
+  function percentile(pool, v, low) {
+    const vals = pool.filter(x => x != null && !Number.isNaN(x));
+    if (v == null || Number.isNaN(v) || !vals.length) return null;
+    let below = 0, eq = 0;
+    for (const x of vals) { if (x < v) below++; else if (x === v) eq++; }
+    const p = (below + eq / 2) / vals.length;
+    return Math.round(100 * (low ? 1 - p : p));
+  }
+  const pcCell = p => p == null ? NA : `<span class="pc ${p >= 75 ? "hi" : p <= 25 ? "lo" : ""}">P${p}</span>`;
+
   // ---------- table ----------
   function table(el, cols, rows, opts = {}) {
     let sortKey = opts.sort, dir = opts.dir || -1;
+    const pool = opts.pool || rows;
+    const pools = {};
+    if (PCT) cols.forEach(c => { if (c.pv) pools[c.key] = pool.map(c.pv); });
+    function cell(c, r) {
+      const raw = c.fmt ? c.fmt(r) : esc(r[c.key]);
+      if (!PCT || !c.pv) return raw;
+      const p = percentile(pools[c.key], c.pv(r), c.low);
+      return `<span title="${esc(String(raw).replace(/<[^>]+>/g, ""))}">${pcCell(p)}</span>`;
+    }
     function draw() {
       const data = rows.slice();
       if (sortKey) {
@@ -65,13 +92,14 @@
           return (x > y ? 1 : x < y ? -1 : 0) * dir;
         });
       }
+      const rk = opts.rowKey || (r => r.owner_key);
       el.innerHTML =
         "<thead><tr>" + cols.map(c => `<th class="${c.l ? "l" : ""}" data-k="${c.key}" ${opts.sortable !== false && sortKey === c.key ? `aria-sort="${dir > 0 ? "ascending" : "descending"}"` : ""}>${c.label}</th>`).join("") + "</tr></thead>" +
-        "<tbody>" + data.map(r => `<tr class="${SEL && (opts.rowKey ? opts.rowKey(r) : r.owner_key) === SEL ? "me" : ""}">` + cols.map(c => `<td class="${c.cls || (c.l ? "l" : "")}">${c.fmt ? c.fmt(r) : esc(r[c.key])}</td>`).join("") + "</tr>").join("") + "</tbody>";
+        "<tbody>" + data.map(r => `<tr class="${SEL && rk(r) === SEL ? "me" : ""}">` + cols.map(c => `<td class="${c.cls || (c.l ? "l" : "")}">${cell(c, r)}</td>`).join("") + "</tr>").join("") + "</tbody>";
       if (el.classList.contains("sortable")) {
         el.querySelectorAll("th").forEach(th => th.addEventListener("click", () => {
-          const k = th.dataset.k;
-          dir = sortKey === k ? -dir : (cols.find(c => c.key === k).asc ? 1 : -1);
+          const k = th.dataset.k, c = cols.find(c => c.key === k);
+          dir = sortKey === k ? -dir : (c.asc ? 1 : -1);
           sortKey = k; draw();
         }));
       }
@@ -81,12 +109,14 @@
   // Season team name, plus the franchise's current name when it has changed since.
   const now = r => r.franchise && r.franchise !== r.name ? `<div class="owner">now ${esc(r.franchise)}</div>` : "";
   const teamCell = r => `${esc(r.name)}${now(r)}`;
+  const yearTag = r => r.year ? ` <span class="tag">${r.year}</span>` : "";
 
   // ---------- horizontal bar chart (diverging when values can be negative) ----------
   addEventListener("resize", () => charts.forEach(([el, items, o]) => el.offsetParent && hbar(el, items, o, true)));
   function hbar(el, items, opts = {}, redraw) {
     const { fmt = v => v.toFixed(1), tipFn } = opts;
     if (!redraw) { const i = charts.findIndex(c => c[0] === el); if (i >= 0) charts.splice(i, 1); charts.push([el, items, opts]); }
+    if (!items.length) { el.innerHTML = '<p class="hint">No data.</p>'; return; }
     const W = Math.max(300, el.clientWidth || el.parentElement.clientWidth - 32), rowH = 26, labelW = Math.min(170, W * 0.36), valW = 44, pad = 6;
     const H = items.length * rowH + 22;
     const min = Math.min(0, ...items.map(i => i.value)), max = Math.max(0, ...items.map(i => i.value));
@@ -94,8 +124,6 @@
     const plotW = W - labelW - valW * (min < 0 ? 2 : 1);
     const x0 = labelW + (min < 0 ? valW : 0);
     const sx = v => x0 + ((v - min) / span) * plotW;
-    const zero = sx(0);
-    // nice ticks
     const step = Math.pow(10, Math.floor(Math.log10(span / 4)));
     const tstep = [1, 2, 5, 10].map(m => m * step).find(s => span / s <= 5) || step * 10;
     const ticks = [];
@@ -110,7 +138,6 @@
       const a = sx(Math.min(0, it.value)), b = sx(Math.max(0, it.value));
       const w = Math.max(b - a, 1), r = Math.min(4, w / 2);
       const neg = it.value < 0;
-      // round only the data end, square on the baseline
       const path = neg
         ? `M${b},${by} H${a + r} Q${a},${by} ${a},${by + r} V${by + bh - r} Q${a},${by + bh} ${a + r},${by + bh} H${b} Z`
         : `M${a},${by} H${b - r} Q${b},${by} ${b},${by + r} V${by + bh - r} Q${b},${by + bh} ${b - r},${by + bh} H${a} Z`;
@@ -120,11 +147,9 @@
       const maxCh = Math.floor(labelW / 7);
       svg += `<text x="${labelW - 8}" y="${y + rowH / 2 + 4}" text-anchor="end" class="${me ? "me" : ""}">${esc(it.label.length > maxCh ? it.label.slice(0, maxCh - 1) + "…" : it.label)}</text>`;
       svg += `<path class="${cls}" d="${path}"/>`;
-      const tx = neg ? a - 4 : b + 4;
-      svg += `<text class="val" x="${tx}" y="${y + rowH / 2 + 4}" text-anchor="${neg ? "end" : "start"}">${fmt(it.value)}</text></g>`;
+      svg += `<text class="val" x="${neg ? a - 4 : b + 4}" y="${y + rowH / 2 + 4}" text-anchor="${neg ? "end" : "start"}">${fmt(it.value)}</text></g>`;
     });
-    svg += "</svg>";
-    el.innerHTML = svg;
+    el.innerHTML = svg + "</svg>";
     el.querySelectorAll("g.row").forEach(g => {
       const it = items[+g.dataset.i];
       g.addEventListener("mousemove", e => tipOn(e, tipFn ? tipFn(it) : `<b>${esc(it.label)}</b><br>${fmt(it.value)}`));
@@ -132,16 +157,39 @@
     });
   }
 
+  // ---------- season selectors: every one gets "All seasons" ----------
+  function seasonSelect(sel, yrs, onChange) {
+    sel.innerHTML = `<option value="${ALL}">All seasons</option>` + yrs.map(y => `<option value="${y}">${y}</option>`).join("");
+    sel.value = String(yrs[0]);
+    sel.addEventListener("change", () => onChange(sel.value));
+  }
+  const selVal = id => $(id).value;
+  // Sum per-season team rows into one row per franchise.
+  function byFranchise(rows, fields, extra = () => ({})) {
+    const m = new Map();
+    for (const r of rows) {
+      let a = m.get(r.owner_key);
+      if (!a) { a = { owner_key: r.owner_key, name: r.franchise, franchise: r.franchise, seasons: new Set(), _rows: [] }; fields.forEach(f => (a[f] = 0)); m.set(r.owner_key, a); }
+      a.seasons.add(r.year); a._rows.push(r);
+      fields.forEach(f => (a[f] += r[f] || 0));
+    }
+    return [...m.values()].map(a => ({ ...a, nseasons: a.seasons.size, ...extra(a) }));
+  }
+  const withYear = (rows, y) => rows.map(r => ({ ...r, year: +y }));
+  const top = (lists, key, n, asc) => lists.flat().sort((a, b) => asc ? a[key] - b[key] : b[key] - a[key]).slice(0, n);
+  function setFlag(id, msgs) { const f = $(id); f.hidden = !msgs.length; f.textContent = msgs.join(" · "); }
+
   // ---------- overview ----------
   const curYear = league.current_season;
   const tile = ([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
+  const allStandings = years.flatMap(y => withYear(p1.seasons[y].standings, y).map(r => ({ ...r, games: r.w + r.l + r.t, weeks: p1.seasons[y].periods_played })));
+  p1.all_time.forEach(r => (r.ppg_x = r.pf / Math.max(1, r.w + r.l + r.t)));
   function renderOverview() {
     const f = SEL && p1.all_time.find(r => r.owner_key === SEL);
     let tiles, h2hRows = null;
     if (f) {
       const cur = p1.seasons[curYear]?.standings.find(r => r.owner_key === SEL);
       const won = p1.champions.filter(c => c.champion && c.champion.owner_key === SEL).map(c => c.year);
-      const fname = Object.fromEntries(p1.all_time.map(r => [r.owner_key, r.franchise]));
       const h2h = Object.entries(p1.head_to_head?.[SEL] || {}).map(([k, r]) => {
         const g = r.w + r.l + r.t;
         return { opp: fname[k] || "Unknown", owner_key: k, g, pct: g ? (r.w + 0.5 * r.t) / g : 0, ...r };
@@ -149,26 +197,27 @@
       const ranked = h2h.filter(r => r.g >= 3).sort((a, b) => b.pct - a.pct || b.g - a.g);
       const bestM = ranked[0], worstM = ranked[ranked.length - 1];
       const mtile = (label, m) => [label, m ? rec(m.w, m.l, m.t) : "–", m ? `vs ${esc(m.opp)}` : "needs 3+ games vs one team"];
+      // With percentiles on, tiles also say where this franchise sits among all franchises.
+      const fp = (v, key, low) => PCT ? ` · P${percentile(p1.all_time.map(r => r[key]), v, low) ?? "–"} of teams` : "";
       tiles = [
         ["Titles", f.titles, won.length ? won.join(", ") : `${f.runner_ups} runner-up finish${f.runner_ups === 1 ? "" : "es"}`],
-        ["Total wins", f.w, `${f.seasons} season${f.seasons === 1 ? "" : "s"}, regular season`],
-        ["Total losses", f.l, f.t ? `${f.t} tie${f.t === 1 ? "" : "s"} · ${pct(f.pct)} win %` : `${pct(f.pct)} win %`],
-        ["Total points scored", Math.round(f.pf).toLocaleString(), "regular season"],
-        ["Total bench points", f.bench_pts == null ? "–" : Math.round(f.bench_pts).toLocaleString(), f.regret_pts == null ? "" : `${Math.round(f.regret_pts).toLocaleString()} should have started`],
+        ["Total wins", f.w, `${f.seasons} season${f.seasons === 1 ? "" : "s"}, regular season${fp(f.pct, "pct")}`],
+        ["Total losses", f.l, (f.t ? `${f.t} tie${f.t === 1 ? "" : "s"} · ` : "") + `${pct(f.pct)} win %`],
+        ["Total points scored", int(f.pf), "regular season" + fp(f.ppg_x, "ppg_x")],
+        ["Total bench points", f.bench_pts == null ? "–" : int(f.bench_pts), f.regret_pts == null ? "" : `${int(f.regret_pts)} should have started`],
         mtile("Best matchup", bestM),
         mtile("Worst matchup", worstM),
-        ["Career luck", signed(f.luck, 1), "wins vs all-play expectation"],
+        ["Career luck", signed(f.luck, 1), "wins vs all-play expectation" + fp(f.luck, "luck")],
       ];
-      h2hRows = h2h;
       if (cur) tiles.unshift([`${curYear} so far`, rec(cur.w, cur.l, cur.t), `#${cur.h2h_rank} H2H · #${cur.ap_rank} all-play · luck ${signed(cur.luck, 1)}`]);
+      h2hRows = h2h;
     } else {
       const at = p1.all_time;
       const most = at.slice().sort((a, b) => b.titles - a.titles || b.pct - a.pct)[0];
       const best = at.filter(r => r.seasons >= 3).sort((a, b) => b.pct - a.pct)[0];
       const lucky = at.slice().sort((a, b) => b.luck - a.luck)[0];
-      const champs = p1.champions.filter(c => c.champion).length;
       tiles = [
-        ["Seasons", years.length, `${champs} champions crowned`],
+        ["Seasons", years.length, `${p1.champions.filter(c => c.champion).length} champions crowned`],
         ["Most titles", most.titles, esc(most.franchise)],
         ["Best all-time record", best ? pct(best.pct) : "–", best ? esc(best.franchise) : ""],
         ["Luckiest franchise", signed(lucky.luck, 1), esc(lucky.franchise)],
@@ -187,7 +236,7 @@
       ], h2hRows, { sort: "pct", rowKey: () => null });
     }
   }
-  const who = x => x ? `${esc(x.name)}${now(x)}` : '<span class="na">–</span>';
+  const who = x => x ? `${esc(x.name)}${x.franchise && x.franchise !== x.name ? `<div class="owner">now ${esc(x.franchise)}</div>` : ""}` : NA;
   function renderChamps() {
     table($("#champs"), [
       { key: "year", label: "Season", l: true, fmt: r => r.year + (r.in_progress ? ' <span class="flag">in progress</span>' : "") },
@@ -197,8 +246,7 @@
       { key: "pf", label: "Most points", l: true, fmt: r => who(r.top_pf) },
       { key: "last", label: "Last place", l: true, fmt: r => who(r.last_place) },
     ], p1.champions.slice().sort((a, b) => b.year - a.year),
-    // Only the picked franchise's title-winning seasons are highlighted.
-    { sortable: false, rowKey: c => c.champion && c.champion.owner_key });
+    { sortable: false, rowKey: c => c.champion && c.champion.owner_key }); // only the picked team's title years light up
   }
 
   // Banner only for genuinely missing data; smaller discrepancies stay on the Data notes tab and per-tab flags.
@@ -206,152 +254,192 @@
   if (flagged.length) {
     const b = $("#coverage-banner");
     b.hidden = false;
-    b.innerHTML = `Missing or partial ESPN data for ${flagged.map(c => c.year).join(", ")}. <a href="#data" data-go="data">See data notes</a>.`;
-    b.querySelector("a").addEventListener("click", e => { e.preventDefault(); show("data"); });
+    b.innerHTML = `Missing or partial ESPN data for ${flagged.map(c => c.year).join(", ")}. <a href="#data">See data notes</a>.`;
   }
 
   // ---------- season ----------
-  function fillSelect(sel, onChange) {
-    sel.innerHTML = years.map(y => `<option>${y}</option>`).join("");
-    sel.addEventListener("change", () => onChange(+sel.value));
-  }
+  const perGame = (v, r) => v / Math.max(1, r.games ?? (r.w + r.l + r.t));
   function renderSeason(y) {
-    const s = p1.seasons[y], c = cov[y] || {};
-    const flag = $("#season-flag");
-    const msgs = [];
-    if (!s.complete) msgs.push(`In progress: ${s.periods_played} of ${s.reg_season_periods} regular-season weeks played`);
-    (c.notes || []).forEach(n => msgs.push(n));
-    flag.hidden = !msgs.length; flag.textContent = msgs.join(" · ");
+    const all = y === ALL;
+    let rows, pool;
+    if (all) {
+      rows = byFranchise(allStandings, ["w", "l", "t", "pf", "pa", "ap_w", "ap_l", "ap_t", "exp_w", "luck", "med_w", "med_l", "med_t", "top_weeks", "games"], a => ({
+        titles: p1.champions.filter(c => c.champion && c.champion.owner_key === a.owner_key).length,
+      })).map(a => ({ ...a, pct: (a.w + 0.5 * a.t) / Math.max(1, a.games), ap_pct: (a.ap_w + 0.5 * a.ap_t) / Math.max(1, a.ap_w + a.ap_l + a.ap_t) }));
+      const rank = cmp => { const o = rows.slice().sort(cmp); return Object.fromEntries(o.map((r, i) => [r.owner_key, i + 1])); };
+      const medW = r => r.med_w + 0.5 * r.med_t, apW = r => r.ap_w + 0.5 * r.ap_t;
+      const h = rank((a, b) => (b.w + .5 * b.t) - (a.w + .5 * a.t) || b.pct - a.pct), ap = rank((a, b) => apW(b) / (b.ap_w + b.ap_l + b.ap_t) * b.games - apW(a) / (a.ap_w + a.ap_l + a.ap_t) * a.games), md = rank((a, b) => medW(b) - medW(a));
+      rows.forEach(r => { r.h2h_rank = h[r.owner_key]; r.ap_rank = ap[r.owner_key]; r.med_rank = md[r.owner_key]; });
+      pool = rows;
+      setFlag("#season-flag", ["All seasons combined: one row per franchise under its current team name, ranked by total wins. Franchises played different numbers of seasons, so turn on Percentiles for a per-game comparison."]);
+    } else {
+      const s = p1.seasons[y], c = cov[y] || {};
+      rows = allStandings.filter(r => r.year === +y);
+      pool = allStandings; // percentiles vs every team-season in history
+      const msgs = [];
+      if (!s.complete) msgs.push(`In progress: ${s.periods_played} of ${s.reg_season_periods} regular-season weeks played`);
+      (c.notes || []).forEach(n => msgs.push(n));
+      setFlag("#season-flag", msgs);
+    }
+    const label = r => all ? r.franchise : r.name;
+    const nameCol = { key: "name", label: all ? "Franchise" : "Team", l: true, fmt: all ? r => esc(r.franchise) : teamCell, sort: r => r.name.toLowerCase(), asc: true };
     table($("#standings"), [
       { key: "h2h_rank", label: "#", asc: true },
-      { key: "name", label: "Team", l: true, fmt: teamCell, sort: r => r.name.toLowerCase(), asc: true },
-      { key: "w", label: "H2H", fmt: r => rec(r.w, r.l, r.t), sort: r => r.pct },
-      { key: "pf", label: "PF", fmt: r => num(r.pf) },
-      { key: "pa", label: "PA", fmt: r => num(r.pa) },
-      { key: "ap_pct", label: "All-play", fmt: r => `${rec(r.ap_w, r.ap_l, r.ap_t)} <span class="owner">${pct(r.ap_pct)}</span>` },
-      { key: "exp_w", label: "Exp W", fmt: r => num(r.exp_w, 1) },
-      { key: "luck", label: "Luck", fmt: r => signed(r.luck, 1) },
-      { key: "med_w", label: "Median fmt", fmt: r => rec(r.med_w, r.med_l, r.med_t), sort: r => r.med_w + 0.5 * r.med_t },
-      { key: "top_weeks", label: "Top score wks" },
-      { key: "final_rank", label: "Final", asc: true, fmt: r => r.final_rank ?? '<span class="na">–</span>' },
-    ], s.standings, { sort: "h2h_rank", dir: 1 });
-    const luck = s.standings.slice().sort((a, b) => b.luck - a.luck)
-      .map(r => ({ label: r.name, value: r.luck, owner_key: r.owner_key, r }));
-    hbar($("#luck-chart"), luck, {
+      nameCol,
+      ...(all ? [{ key: "nseasons", label: "Seasons" }, { key: "titles", label: "Titles" }] : []),
+      { key: "w", label: "H2H", fmt: r => rec(r.w, r.l, r.t), sort: r => r.pct, pv: r => r.pct },
+      { key: "pf", label: "PF", fmt: r => num(r.pf), pv: r => perGame(r.pf, r) },
+      { key: "pa", label: "PA", fmt: r => num(r.pa), pv: r => perGame(r.pa, r), low: true },
+      { key: "ap_pct", label: "All-play", fmt: r => `${rec(r.ap_w, r.ap_l, r.ap_t)} <span class="owner">${pct(r.ap_pct)}</span>`, pv: r => r.ap_pct },
+      { key: "exp_w", label: "Exp W", fmt: r => num(r.exp_w, 1), pv: r => perGame(r.exp_w, r) },
+      { key: "luck", label: "Luck", fmt: r => signed(r.luck, 1), pv: r => perGame(r.luck, r) },
+      { key: "med_w", label: "Median fmt", fmt: r => rec(r.med_w, r.med_l, r.med_t), sort: r => r.med_w + 0.5 * r.med_t, pv: r => perGame(r.med_w + 0.5 * r.med_t, r) },
+      { key: "top_weeks", label: "Top score wks", pv: r => perGame(r.top_weeks, r) },
+      ...(all ? [] : [{ key: "final_rank", label: "Final", asc: true, fmt: r => r.final_rank ?? NA }]),
+    ], rows, { sort: "h2h_rank", dir: 1, pool });
+    hbar($("#luck-chart"), rows.slice().sort((a, b) => b.luck - a.luck).map(r => ({ label: label(r), value: r.luck, owner_key: r.owner_key, r })), {
       fmt: v => signed(v, 1),
-      tipFn: it => `<b>${esc(it.r.name)}</b><br>Actual ${rec(it.r.w, it.r.l, it.r.t)} · expected ${it.r.exp_w.toFixed(1)} wins<br>Luck ${signed(it.value, 2)}`,
+      tipFn: it => `<b>${esc(label(it.r))}</b><br>Actual ${rec(it.r.w, it.r.l, it.r.t)} · expected ${it.r.exp_w.toFixed(1)} wins<br>Luck ${signed(it.value, 2)}`,
     });
     const arrow = (a, b) => a === b ? "" : `<span class="owner"> (${a > b ? "▲" : "▼"}${Math.abs(a - b)})</span>`;
     table($("#formats"), [
-      { key: "name", label: "Team", l: true, fmt: teamCell },
+      nameCol,
       { key: "h2h_rank", label: "H2H", asc: true },
       { key: "ap_rank", label: "All-play", fmt: r => r.ap_rank + arrow(r.h2h_rank, r.ap_rank) },
       { key: "med_rank", label: "Median", fmt: r => r.med_rank + arrow(r.h2h_rank, r.med_rank) },
-    ], s.standings, { sort: "h2h_rank", dir: 1, sortable: false });
+    ], rows, { sort: "h2h_rank", dir: 1, sortable: false });
   }
-  fillSelect($("#season-select"), renderSeason);
+  seasonSelect($("#season-select"), years, renderSeason);
 
   // ---------- all-time ----------
   function renderAlltime() {
-  table($("#alltime"), [
-    { key: "franchise", label: "Franchise", l: true, fmt: r => esc(r.franchise), sort: r => r.franchise.toLowerCase(), asc: true },
-    { key: "seasons", label: "Seasons" },
-    { key: "titles", label: "Titles" },
-    { key: "runner_ups", label: "2nd" },
-    { key: "playoffs", label: "Playoffs" },
-    { key: "pct", label: "H2H", fmt: r => `${rec(r.w, r.l, r.t)} <span class="owner">${pct(r.pct)}</span>` },
-    { key: "ap_pct", label: "All-play %", fmt: r => pct(r.ap_pct) },
-    { key: "luck", label: "Luck", fmt: r => signed(r.luck, 1) },
-    { key: "med_w", label: "Median fmt", fmt: r => rec(r.med_w, r.med_l) },
-    { key: "pf", label: "PF", fmt: r => Math.round(r.pf).toLocaleString() },
-    { key: "regret_pts", label: "Bench pts", fmt: r => r.regret_pts == null ? "–" : Math.round(r.regret_pts).toLocaleString() },
-    { key: "last_places", label: "Last" },
-  ], p1.all_time, { sort: "titles" });
-  hbar($("#career-luck"), p1.all_time.slice().sort((a, b) => b.luck - a.luck).map(r => ({ label: r.franchise, value: r.luck, owner_key: r.owner_key, r })), {
-    fmt: v => signed(v, 1),
-    tipFn: it => `<b>${esc(it.r.franchise)}</b><br>${it.r.seasons} seasons · ${rec(it.r.w, it.r.l, it.r.t)}<br>Luck ${signed(it.value, 2)} wins`,
-  });
+    table($("#alltime"), [
+      { key: "franchise", label: "Franchise", l: true, fmt: r => esc(r.franchise), sort: r => r.franchise.toLowerCase(), asc: true },
+      { key: "seasons", label: "Seasons" },
+      { key: "titles", label: "Titles", pv: r => r.titles / r.seasons },
+      { key: "runner_ups", label: "2nd" },
+      { key: "playoffs", label: "Playoffs", pv: r => r.playoffs / r.seasons },
+      { key: "pct", label: "H2H", fmt: r => `${rec(r.w, r.l, r.t)} <span class="owner">${pct(r.pct)}</span>`, pv: r => r.pct },
+      { key: "ap_pct", label: "All-play %", fmt: r => pct(r.ap_pct), pv: r => r.ap_pct },
+      { key: "luck", label: "Luck", fmt: r => signed(r.luck, 1), pv: r => r.luck / r.seasons },
+      { key: "med_w", label: "Median fmt", fmt: r => rec(r.med_w, r.med_l) },
+      { key: "pf", label: "PF", fmt: r => int(r.pf), pv: r => r.ppg_x },
+      { key: "bench_pts", label: "Bench pts", fmt: r => int(r.bench_pts) },
+      { key: "regret_pts", label: "Should have started", fmt: r => int(r.regret_pts), pv: r => r.regret_pts / r.seasons, low: true },
+      { key: "last_places", label: "Last" },
+    ], p1.all_time, { sort: "titles" });
+    hbar($("#career-luck"), p1.all_time.slice().sort((a, b) => b.luck - a.luck).map(r => ({ label: r.franchise, value: r.luck, owner_key: r.owner_key, r })), {
+      fmt: v => signed(v, 1),
+      tipFn: it => `<b>${esc(it.r.franchise)}</b><br>${it.r.seasons} seasons · ${rec(it.r.w, it.r.l, it.r.t)}<br>Luck ${signed(it.value, 2)} wins`,
+    });
   }
 
-  // ---------- regret ----------
+  // ---------- start/sit ----------
+  const regretRows = allStandings.filter(r => r.regret_pts != null);
   function renderRegret(y) {
-    const s = p1.seasons[y];
-    const rows = s.standings.filter(r => r.regret_pts != null);
-    const empty = '<p class="hint">No lineup data for this season.</p>';
-    if (!rows.length) { $("#regret-chart").innerHTML = empty; $("#regret-table").innerHTML = ""; $("#blunders").innerHTML = ""; return; }
-    hbar($("#regret-chart"), rows.slice().sort((a, b) => b.regret_pts - a.regret_pts).map(r => ({ label: r.name, value: r.regret_pts, owner_key: r.owner_key, r })), {
+    const all = y === ALL;
+    const rows = all
+      ? byFranchise(regretRows, ["regret_pts", "regret_losses", "lineup_pf", "optimal_pf", "bench_pts", "weeks"]).map(a => ({ ...a, efficiency: a.lineup_pf / a.optimal_pf }))
+      : regretRows.filter(r => r.year === +y);
+    if (!rows.length) { ["#regret-chart", "#regret-table", "#blunders"].forEach(s => ($(s).innerHTML = '<p class="hint">No lineup data for this season.</p>')); return; }
+    const label = r => all ? r.franchise : r.name;
+    hbar($("#regret-chart"), rows.slice().sort((a, b) => b.regret_pts - a.regret_pts).map(r => ({ label: label(r), value: r.regret_pts, owner_key: r.owner_key, r })), {
       fmt: v => v.toFixed(0),
-      tipFn: it => `<b>${esc(it.r.name)}</b><br>${it.r.regret_pts.toFixed(1)} pts left on bench<br>${it.r.regret_losses} games cost · ${(it.r.efficiency * 100).toFixed(1)}% efficient`,
+      tipFn: it => `<b>${esc(label(it.r))}</b><br>${it.r.regret_pts.toFixed(1)} pts left on bench<br>${it.r.regret_losses} games cost · ${(it.r.efficiency * 100).toFixed(1)}% efficient`,
     });
+    const perWeek = (v, r) => v / Math.max(1, r.weeks);
     table($("#regret-table"), [
-      { key: "name", label: "Team", l: true, fmt: teamCell },
-      { key: "efficiency", label: "Efficiency", fmt: r => (r.efficiency * 100).toFixed(1) + "%" },
-      { key: "regret_losses", label: "Games cost" },
-      { key: "lineup_pf", label: "Used", fmt: r => num(r.lineup_pf, 0) },
-      { key: "optimal_pf", label: "Best", fmt: r => num(r.optimal_pf, 0) },
-    ], rows, { sort: "efficiency" });
-    const owners = Object.fromEntries(s.standings.map(r => [r.team_id, r]));
+      { key: "name", label: all ? "Franchise" : "Team", l: true, fmt: all ? r => esc(r.franchise) : teamCell },
+      { key: "efficiency", label: "Efficiency", fmt: r => (r.efficiency * 100).toFixed(1) + "%", pv: r => r.efficiency },
+      { key: "regret_losses", label: "Games cost", pv: r => perWeek(r.regret_losses, r), low: true },
+      { key: "bench_pts", label: "Bench pts", fmt: r => num(r.bench_pts, 0) },
+      { key: "lineup_pf", label: "Used", fmt: r => num(r.lineup_pf, 0), pv: r => perWeek(r.lineup_pf, r) },
+      { key: "optimal_pf", label: "Best", fmt: r => num(r.optimal_pf, 0), pv: r => perWeek(r.optimal_pf, r) },
+    ], rows, { sort: "efficiency", pool: all ? rows : regretRows });
+    const blunders = all ? top(years.map(yy => withYear(p1.seasons[yy].blunders, yy)), "lost", 15) : p1.seasons[y].blunders.slice(0, 15).map(b => ({ ...b, year: null }));
+    const tm = yy => Object.fromEntries(p1.seasons[yy || y].standings.map(r => [r.team_id, r]));
     table($("#blunders"), [
-      { key: "period", label: "Wk" },
-      { key: "team", label: "Team", l: true, fmt: b => teamCell(owners[b.team_id] || { name: b.team }) },
+      { key: "period", label: "Wk", fmt: b => b.period + yearTag(b) },
+      { key: "team", label: "Team", l: true, fmt: b => teamCell(tm(b.year)[b.team_id] || { name: b.team }) },
       { key: "lost", label: "Pts lost", fmt: b => b.lost.toFixed(1) },
       { key: "cost", label: "Result", l: true, fmt: b => b.playoff ? "playoff" : b.cost_game ? "<b>cost the game</b>" : "" },
       { key: "should_start", label: "Should have started", cls: "wrapcell", fmt: b => esc(b.should_start.join(", ")) },
       { key: "did_start", label: "Instead of", cls: "wrapcell", fmt: b => esc(b.did_start.join(", ")) },
-    ], s.blunders.slice(0, 15).map(b => ({ ...b, owner_key: owners[b.team_id]?.owner_key })), { sortable: false });
+    ], blunders.map(b => ({ ...b, owner_key: tm(b.year)[b.team_id]?.owner_key })), { sortable: false });
   }
-  fillSelect($("#regret-select"), renderRegret);
+  seasonSelect($("#regret-select"), years, renderRegret);
 
   // ---------- waivers ----------
+  let renderWaivers = () => {};
   if (p2) {
-    const money = v => v == null ? '<span class="na">–</span>' : "$" + v;
     const playerCell = a => `${esc(a.player)}<div class="owner">${esc(a.team)}</div>`;
-    const wk = a => a.sp ? `wk ${a.sp}` : "preseason";
+    const wk = a => (a.sp ? `wk ${a.sp}` : "preseason") + yearTag(a);
     const wYears = Object.keys(p2.seasons).map(Number).sort((a, b) => b - a);
-    function renderWaivers(y) {
-      const w = p2.seasons[y];
-      const flag = $("#waiver-flag");
-      const msgs = (cov[y]?.notes || []).filter(n => /FAAB|add/.test(n));
-      if (!p1.seasons[y]?.complete) msgs.unshift("In progress: values grow as the season goes on");
-      flag.hidden = !msgs.length; flag.textContent = msgs.join(" · ");
-      hbar($("#waiver-chart"), w.teams.map(t => ({ label: t.name, value: t.started_pts, owner_key: t.owner_key, t })), {
+    const wTeams = wYears.flatMap(y => withYear(p2.seasons[y].teams, y).map(t => ({ ...t, weeks: p1.seasons[y]?.periods_played || 1, faab: p2.seasons[y].faab })));
+    renderWaivers = y => {
+      const all = y === ALL;
+      const faabYears = wYears.filter(yy => p2.seasons[yy].faab);
+      let rows, w, lists;
+      if (all) {
+        rows = byFranchise(wTeams, ["adds", "started_pts", "hits", "weeks"]).map(a => {
+          const f = a._rows.filter(r => r.faab);
+          const spent = sum(f, r => r.faab_spent), fpts = sum(f, r => r.faab_pts);
+          return { ...a, pts_per_add: a.adds ? a.started_pts / a.adds : null, faab_spent: spent, overpaid: sum(f, r => r.overpaid), pts_per_dollar: spent ? fpts / spent : null };
+        });
+        w = { faab: faabYears.length > 0 };
+        const L = k => wYears.map(yy => withYear(p2.seasons[yy][k], yy));
+        lists = { best_adds: top(L("best_adds"), "started_pts", 12), best_value: top(L("best_value"), "pts_per_dollar", 10),
+                  busts: top(L("busts"), "started_pts", 10, true), overpays: top(L("overpays"), "overpay", 12) };
+        setFlag("#waiver-flag", [`All seasons combined. FAAB columns cover ${faabYears.slice().reverse().join(", ")} only.`]);
+      } else {
+        w = p2.seasons[y];
+        rows = wTeams.filter(t => t.year === +y);
+        lists = { best_adds: w.best_adds, best_value: w.best_value, busts: w.busts, overpays: w.overpays };
+        const msgs = (cov[y]?.notes || []).filter(n => /FAAB|add/.test(n));
+        if (!p1.seasons[y]?.complete) msgs.unshift("In progress: values grow as the season goes on");
+        setFlag("#waiver-flag", msgs);
+      }
+      const label = r => all ? r.franchise : r.name;
+      hbar($("#waiver-chart"), rows.slice().sort((a, b) => b.started_pts - a.started_pts).map(t => ({ label: label(t), value: t.started_pts, owner_key: t.owner_key, t })), {
         fmt: v => Math.round(v),
-        tipFn: it => `<b>${esc(it.t.name)}</b><br>${it.t.adds} adds · ${it.t.started_pts.toFixed(0)} started pts<br>Best: ${esc(it.t.best || "–")}`,
+        tipFn: it => `<b>${esc(label(it.t))}</b><br>${it.t.adds} adds · ${it.t.started_pts.toFixed(0)} started pts`,
       });
+      const perWeek = (v, r) => v / Math.max(1, r.weeks);
       const cols = [
-        { key: "name", label: "Team", l: true, fmt: teamCell, sort: r => r.name.toLowerCase(), asc: true },
+        { key: "name", label: all ? "Franchise" : "Team", l: true, fmt: all ? r => esc(r.franchise) : teamCell, sort: r => r.name.toLowerCase(), asc: true },
         { key: "adds", label: "Adds" },
-        { key: "pts_per_add", label: "Pts/add", fmt: r => num(r.pts_per_add, 1) },
-        { key: "hits", label: "Hits" },
+        { key: "started_pts", label: "Started pts", fmt: r => num(r.started_pts, 0), pv: r => perWeek(r.started_pts, r) },
+        { key: "pts_per_add", label: "Pts/add", fmt: r => num(r.pts_per_add, 1), pv: r => r.pts_per_add },
+        { key: "hits", label: "Hits", pv: r => perWeek(r.hits, r) },
       ];
       if (w.faab) cols.push(
         { key: "faab_spent", label: "FAAB", fmt: r => money(r.faab_spent) },
-        { key: "pts_per_dollar", label: "Pts/$", fmt: r => num(r.pts_per_dollar, 2) },
+        { key: "pts_per_dollar", label: "Pts/$", fmt: r => num(r.pts_per_dollar, 2), pv: r => r.pts_per_dollar },
         { key: "overpaid", label: "Overpaid", fmt: r => money(r.overpaid) },
       );
-      table($("#waiver-teams"), cols, w.teams, { sort: "pts_per_add" });
+      table($("#waiver-teams"), cols, rows, { sort: "pts_per_add", pool: all ? rows : wTeams });
       table($("#best-adds"), [
         { key: "player", label: "Player", l: true, fmt: playerCell },
         { key: "sp", label: "Added", fmt: wk },
-        { key: "bid", label: "Cost", fmt: a => w.faab ? money(a.bid) : (a.type === "FREEAGENT" ? "FA" : "waiver") },
+        { key: "bid", label: "Cost", fmt: a => a.bid != null ? money(a.bid) : (a.type === "FREEAGENT" ? "FA" : "waiver") },
         { key: "starts", label: "Starts" },
         { key: "started_pts", label: "Started pts", fmt: a => a.started_pts.toFixed(1) },
         { key: "bench_pts", label: "Bench pts", fmt: a => a.bench_pts.toFixed(1) },
-      ], w.best_adds.slice(0, 12), { sortable: false });
+      ], lists.best_adds.slice(0, 12), { sortable: false });
       $("#faab-sections").hidden = !w.faab;
       if (w.faab) {
         table($("#best-value"), [
           { key: "player", label: "Player", l: true, fmt: playerCell },
-          { key: "bid", label: "Bid", fmt: a => money(a.bid) },
+          { key: "bid", label: "Bid", fmt: a => money(a.bid) + yearTag(a) },
           { key: "started_pts", label: "Pts", fmt: a => a.started_pts.toFixed(0) },
           { key: "pts_per_dollar", label: "Pts/$", fmt: a => a.pts_per_dollar.toFixed(1) },
-        ], w.best_value.slice(0, 10), { sortable: false });
+        ], lists.best_value.slice(0, 10), { sortable: false });
         table($("#busts"), [
           { key: "player", label: "Player", l: true, fmt: playerCell },
-          { key: "bid", label: "Bid", fmt: a => money(a.bid) },
+          { key: "bid", label: "Bid", fmt: a => money(a.bid) + yearTag(a) },
           { key: "starts", label: "Starts" },
           { key: "started_pts", label: "Pts", fmt: a => a.started_pts.toFixed(0) },
-        ], w.busts.slice(0, 10), { sortable: false });
+        ], lists.busts.slice(0, 10), { sortable: false });
         table($("#overpays"), [
           { key: "player", label: "Player", l: true, fmt: playerCell },
           { key: "sp", label: "Run", fmt: wk },
@@ -360,40 +448,149 @@
           { key: "bidders", label: "Bidders" },
           { key: "overpay", label: "Overpaid by", fmt: a => `<b>${money(a.overpay)}</b>` },
           { key: "started_pts", label: "Started pts", fmt: a => a.started_pts.toFixed(0) },
-        ], w.overpays.slice(0, 12), { sortable: false });
+        ], lists.overpays.slice(0, 12), { sortable: false });
       }
-    }
-    const sel = $("#waiver-select");
-    sel.innerHTML = wYears.map(y => `<option>${y}</option>`).join("");
-    sel.addEventListener("change", () => renderWaivers(+sel.value));
-    var renderWaiverAll = () => { renderWaivers(+sel.value); table($("#waiver-alltime"), [
-      { key: "franchise", label: "Franchise", l: true, fmt: r => esc(r.franchise), sort: r => r.franchise.toLowerCase(), asc: true },
-      { key: "seasons", label: "Seasons" },
-      { key: "adds", label: "Adds" },
-      { key: "started_pts", label: "Started pts", fmt: r => Math.round(r.started_pts).toLocaleString() },
-      { key: "pts_per_add", label: "Pts/add", fmt: r => num(r.pts_per_add, 1) },
-      { key: "hits", label: "Hits" },
-      { key: "faab_spent", label: "FAAB", fmt: r => money(r.faab_spent) },
-      { key: "pts_per_dollar", label: "Pts/$", fmt: r => num(r.pts_per_dollar, 2) },
-      { key: "overpaid", label: "Overpaid", fmt: r => money(r.overpaid) },
-    ], p2.all_time, { sort: "started_pts" }); };
+      table($("#waiver-alltime"), [
+        { key: "franchise", label: "Franchise", l: true, fmt: r => esc(r.franchise), sort: r => r.franchise.toLowerCase(), asc: true },
+        { key: "seasons", label: "Seasons" },
+        { key: "adds", label: "Adds" },
+        { key: "started_pts", label: "Started pts", fmt: r => int(r.started_pts), pv: r => r.started_pts / r.seasons },
+        { key: "pts_per_add", label: "Pts/add", fmt: r => num(r.pts_per_add, 1), pv: r => r.pts_per_add },
+        { key: "hits", label: "Hits", pv: r => r.hits / r.seasons },
+        { key: "faab_spent", label: "FAAB", fmt: r => money(r.faab_spent) },
+        { key: "pts_per_dollar", label: "Pts/$", fmt: r => num(r.pts_per_dollar, 2), pv: r => r.pts_per_dollar },
+        { key: "overpaid", label: "Overpaid", fmt: r => money(r.overpaid) },
+      ], p2.all_time, { sort: "started_pts" });
+    };
+    seasonSelect($("#waiver-select"), wYears, v => renderWaivers(v));
   } else {
     document.querySelector('[data-tab="waivers"]').hidden = true;
   }
 
-  // ---------- team picker ----------
+  // ---------- draft vs ADP ----------
+  let renderDraft = () => {};
+  if (p3 && Object.keys(p3.seasons).length) {
+    const dYears = Object.keys(p3.seasons).map(Number).sort((a, b) => b - a);
+    const isFP = y => p3.seasons[y].adp_source === "FantasyPros";
+    const dTeams = dYears.flatMap(y => withYear(p3.seasons[y].teams, y).map(t => ({ ...t, fp: isFP(y) })));
+    const allPicks = dYears.flatMap(y => p3.seasons[y].picks.map(p => ({ ...p, fp: isFP(y) })));
+    const pickCell = p => `${esc(p.player)} <span class="owner">${esc(p.pos)}</span><div class="owner">${esc(p.team)}</div>`;
+    const slot = p => `${p.round}.${String(p.round_pick).padStart(2, "0")}` + yearTag(p);
+    const pickCols = extra => [
+      { key: "player", label: "Player", l: true, fmt: pickCell },
+      { key: "overall", label: "Pick", fmt: slot },
+      { key: "adp", label: "ADP", fmt: p => num(p.adp, 0) },
+      ...extra,
+    ];
+    renderDraft = y => {
+      const all = y === ALL;
+      let rows, lists, d = null;
+      if (all) {
+        const fpYears = dYears.filter(isFP);
+        rows = byFranchise(dTeams.filter(t => t.fp), ["picks", "draft_value", "draft_pts"]).map(a => {
+          const mine = allPicks.filter(p => p.fp && p.owner_key === a.owner_key);
+          const st = mine.filter(p => p.steal != null), gr = mine.filter(p => p.value_vs_adp != null);
+          return { ...a, avg_steal: st.length ? sum(st, p => p.steal) / st.length : null,
+                   beat_adp_pct: gr.length ? gr.filter(p => p.value_vs_adp > 0).length / gr.length : null,
+                   per_draft: a.draft_value / a.nseasons };
+        });
+        const fpPicks = allPicks.filter(p => p.fp);
+        const L = (key, asc) => fpPicks.filter(p => p[key] != null).sort((a, b) => asc ? a[key] - b[key] : b[key] - a[key]).slice(0, 12);
+        lists = { best_picks: L("pick_value"), worst_picks: L("pick_value", true), steals: L("steal"), reaches: L("steal", true) };
+        const left = dYears.filter(yy => !isFP(yy));
+        setFlag("#draft-flag", [`All seasons combined: ${fpYears.slice().reverse().join(", ")} (FantasyPros consensus)` + (left.length ? `. ${left.join(", ")} used ESPN ADP and is left out.` : ".")]);
+      } else {
+        d = p3.seasons[y];
+        rows = dTeams.filter(t => t.year === +y);
+        const noYear = l => l.map(p => ({ ...p, year: null }));  // single season: no year tags
+        lists = { best_picks: noYear(d.best_picks), worst_picks: noYear(d.worst_picks), steals: noYear(d.steals), reaches: noYear(d.reaches) };
+        const msgs = [d.adp_detail];
+        if (!d.complete) msgs.push(`In progress: points through ${d.periods} weeks`);
+        (cov[y]?.notes || []).filter(n => /ADP|keeper|consensus/i.test(n)).forEach(n => msgs.push(n));
+        setFlag("#draft-flag", msgs);
+      }
+      const label = r => all ? r.franchise : r.name;
+      hbar($("#draft-chart"), rows.slice().sort((a, b) => b.draft_value - a.draft_value).map(t => ({ label: label(t), value: t.draft_value, owner_key: t.owner_key, t })), {
+        fmt: v => signed(v, 0),
+        tipFn: it => `<b>${esc(label(it.t))}</b><br>Draft value ${signed(it.t.draft_value, 0)} pts vs slot<br>Avg steal ${signed(it.t.avg_steal, 1)} picks · beat ADP ${it.t.beat_adp_pct == null ? "–" : Math.round(it.t.beat_adp_pct * 100) + "%"}`,
+      });
+      table($("#draft-teams"), [
+        { key: "name", label: all ? "Franchise" : "Team", l: true, fmt: all ? r => esc(r.franchise) : teamCell },
+        ...(all ? [{ key: "nseasons", label: "Drafts" }] : []),
+        { key: "draft_value", label: "Draft value", fmt: r => signed(r.draft_value, 0), pv: r => all ? r.per_draft : r.draft_value },
+        { key: "avg_steal", label: "Avg steal", fmt: r => signed(r.avg_steal, 1), pv: r => r.avg_steal },
+        { key: "beat_adp_pct", label: "Beat ADP", fmt: r => r.beat_adp_pct == null ? NA : Math.round(r.beat_adp_pct * 100) + "%", pv: r => r.beat_adp_pct },
+        ...(all ? [] : [
+          { key: "best", label: "Best pick", l: true, fmt: r => `${esc(r.best)} <span class="owner">${signed(r.best_value, 0)}</span>` },
+          { key: "worst", label: "Worst pick", l: true, fmt: r => `${esc(r.worst)} <span class="owner">${signed(r.worst_value, 0)}</span>` },
+        ]),
+      ], rows, { sort: "draft_value", pool: all ? rows : dTeams.filter(t => t.fp) });
+      const vcols = pickCols([
+        { key: "pts", label: "Pts", fmt: p => num(p.pts, 0) },
+        { key: "pos_finish", label: "Finish", fmt: p => `${esc(p.pos_finish || "–")} <span class="owner">ADP ${esc(p.pos_adp || "–")}</span>` },
+        { key: "pick_value", label: "Value", fmt: p => `<b>${signed(p.pick_value, 0)}</b>` },
+      ]);
+      table($("#best-picks"), vcols, lists.best_picks.slice(0, 10), { sortable: false });
+      table($("#worst-picks"), vcols, lists.worst_picks.slice(0, 10), { sortable: false });
+      const scols = pickCols([
+        { key: "steal", label: "Steal", fmt: p => `<b>${signed(p.steal, 0)}</b>` },
+        { key: "pts", label: "Pts", fmt: p => num(p.pts, 0) },
+        { key: "pick_value", label: "Value", fmt: p => signed(p.pick_value, 0) },
+      ]);
+      table($("#steals"), scols, lists.steals.slice(0, 10), { sortable: false });
+      table($("#reaches"), scols, lists.reaches.slice(0, 10), { sortable: false });
+
+      // Draft board: a season's full draft, or the picked team's picks across all seasons.
+      const board = all ? (SEL ? allPicks.filter(p => p.owner_key === SEL).sort((a, b) => b.year - a.year || a.overall - b.overall) : []) : d.picks;
+      $("#board-title").textContent = all ? (SEL ? `Draft history: ${fname[SEL]}` : "Draft history") : `${y} draft board`;
+      $("#board-hint").textContent = all && !SEL ? "Select your team at the top to see its picks from every draft." :
+        "Click a header to sort. Taken = order our league took that position; ADP pos = consensus positional rank; Finish = positional finish in our scoring.";
+      const posNum = k => p => +String(p[k] || "").replace(/\D/g, "") || 999;
+      table($("#board"), [
+        { key: "overall", label: "Pick", fmt: p => slot(all ? p : { ...p, year: null }), asc: true },
+        { key: "team", label: "Team", l: true, fmt: p => teamCell({ name: p.team, franchise: p.franchise }), sort: p => p.team.toLowerCase(), asc: true },
+        { key: "player", label: "Player", l: true, fmt: p => esc(p.player) + (p.keeper ? ' <span class="tag">keeper</span>' : ""), sort: p => p.player.toLowerCase(), asc: true },
+        { key: "pos", label: "Pos", l: true },
+        { key: "adp", label: "ADP", fmt: p => num(p.adp, 0), asc: true },
+        { key: "steal", label: "Steal", fmt: p => signed(p.steal, 0) },
+        { key: "pos_taken", label: "Taken", fmt: p => esc(p.pos_taken || "–"), sort: posNum("pos_taken"), asc: true },
+        { key: "pos_adp", label: "ADP pos", fmt: p => esc(p.pos_adp || "–"), sort: posNum("pos_adp"), asc: true },
+        { key: "pos_finish", label: "Finish", fmt: p => esc(p.pos_finish || "–"), sort: posNum("pos_finish"), asc: true },
+        { key: "pts", label: "Pts", fmt: p => num(p.pts, 0) },
+        { key: "pick_value", label: "Value", fmt: p => signed(p.pick_value, 0) },
+      ], board, { sort: all ? null : "overall", dir: 1 });
+      table($("#draft-alltime"), [
+        { key: "franchise", label: "Franchise", l: true, fmt: r => esc(r.franchise), sort: r => r.franchise.toLowerCase(), asc: true },
+        { key: "seasons", label: "Drafts" },
+        { key: "picks", label: "Picks" },
+        { key: "value_per_draft", label: "Value per draft", fmt: r => signed(r.value_per_draft, 1), pv: r => r.value_per_draft },
+        { key: "draft_value", label: "Total value", fmt: r => signed(r.draft_value, 0) },
+        { key: "avg_steal", label: "Avg steal", fmt: r => signed(r.avg_steal, 1), pv: r => r.avg_steal },
+        { key: "beat_adp_pct", label: "Beat ADP", fmt: r => r.beat_adp_pct == null ? NA : Math.round(r.beat_adp_pct * 100) + "%", pv: r => r.beat_adp_pct },
+      ], p3.all_time, { sort: "value_per_draft" });
+    };
+    seasonSelect($("#draft-select"), dYears, v => renderDraft(v));
+  } else {
+    document.querySelector('[data-tab="draft"]').hidden = true;
+  }
+
+  // ---------- picker + percentile toggle ----------
   const picker = $("#team-picker");
   picker.innerHTML = '<option value="">All teams (no highlight)</option>' +
     franchises.map(f => `<option value="${esc(f.key)}">${esc(f.name)}</option>`).join("");
   picker.value = SEL || "";
+  const toggle = $("#pct-toggle");
+  toggle.checked = PCT;
   function renderAll() {
+    $("#pct-hint").hidden = !PCT;
     renderOverview(); renderChamps(); renderAlltime();
-    renderSeason(+$("#season-select").value); renderRegret(+$("#regret-select").value);
-    if (p2) renderWaiverAll();
+    renderSeason(selVal("#season-select")); renderRegret(selVal("#regret-select"));
+    if (p2) renderWaivers(selVal("#waiver-select"));
+    if (p3) renderDraft(selVal("#draft-select"));
   }
   picker.addEventListener("change", () => {
     SEL = picker.value || null;
-    try { SEL ? localStorage.setItem("ffdash.team", SEL) : localStorage.removeItem("ffdash.team"); } catch (e) {}
+    store.set("ffdash.team", SEL);
     try {
       const u = new URL(location.href);
       SEL ? u.searchParams.set("team", SEL) : u.searchParams.delete("team");
@@ -401,6 +598,7 @@
     } catch (e) {}
     renderAll();
   });
+  toggle.addEventListener("change", () => { PCT = toggle.checked; store.set("ffdash.pct", PCT ? "1" : null); renderAll(); });
   renderAll();
 
   // ---------- data notes ----------
@@ -412,8 +610,9 @@
     { key: "lineups", label: "Lineups", fmt: c => c.lineup_periods_expected ? `${yn(c.lineups)} <span class="owner">${c.lineup_periods}/${c.lineup_periods_expected} wks</span>` : yn(c.lineups) },
     { key: "owners", label: "Managers", fmt: c => yn(c.owners) },
     { key: "transactions", label: "Waivers", fmt: c => c.transactions == null ? "–" : `${yn(c.transactions)}${c.transactions && !c.faab ? ' <span class="owner">no FAAB</span>' : ""}` },
-    { key: "notes", label: "Missing data", cls: "wrapcell", fmt: c => esc((c.notes || []).join(" ")) || '<span class="na">none</span>' },
+    { key: "draft", label: "Draft", fmt: c => c.draft == null ? "–" : yn(c.draft) },
+    { key: "notes", label: "Missing / caveats", cls: "wrapcell", fmt: c => esc((c.notes || []).join(" ")) || '<span class="na">none</span>' },
     { key: "changes", label: "League changes", cls: "wrapcell", fmt: c => esc((c.changes || []).join(" ")) },
-  ], league.coverage, { sortable: false });
+  ], league.coverage, { sortable: false, rowKey: () => null });
   $("#identity-notes").innerHTML = (p1.identity_notes || []).map(n => `<li>${esc(n)}</li>`).join("") || "<li>None.</li>";
 })();
