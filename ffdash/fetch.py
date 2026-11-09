@@ -148,7 +148,7 @@ def _player_rows(players: list, year: int) -> dict:
         for st in p.get("stats", []):
             if st.get("seasonId") == year and st.get("statSourceId") == 0 and st.get("statSplitTypeId") == 1:
                 wk[st["scoringPeriodId"]] += st.get("appliedTotal", 0) or 0
-        out[p["id"]] = {
+        out[str(p["id"])] = {  # str keys: same shape fresh or reloaded from JSON
             "name": p.get("fullName", ""),
             "pos": DEFAULT_POS.get(p.get("defaultPositionId")) or _main_pos(p.get("eligibleSlots", [])),
             "pro_team": p.get("proTeamId"),
@@ -172,7 +172,7 @@ def _draft(league: League, year: int, final_period: int) -> tuple[list, dict]:
         {"players": {"limit": 400, "sortAppliedStatTotal": {"sortAsc": False, "sortPriority": 1, "value": f"00{year}"},
                      "filterStatsForTopScoringPeriodIds": stat_filter}})})
     players = _player_rows(top.get("players", []), year)
-    missing = [p["pid"] for p in picks if p["pid"] not in players]
+    missing = [p["pid"] for p in picks if str(p["pid"]) not in players]
     for i in range(0, len(missing), 50):
         card = league.espn_request.get_player_card(missing[i:i + 50], final_period)
         players.update(_player_rows(card.get("players", []), year))
