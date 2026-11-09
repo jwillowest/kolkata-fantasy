@@ -20,7 +20,11 @@ import re
 
 from espn_api.football.constant import PRO_TEAM_MAP
 
-from .fetch import RAW_DIR
+from .config import ROOT
+
+# Committed to the repo (public rankings, no personal data) so builds never depend on the download
+# for past drafts. Kept outside data/raw, which the Action restores from its own cache.
+ADP_DIR = ROOT / "data" / "adp"
 
 log = logging.getLogger(__name__)
 ADP_VERSION = 2
@@ -94,7 +98,7 @@ def _from_fantasypros(season: dict) -> dict | None:
     unmatched = sorted(season["players"][pid]["name"] for pid in drafted if pid not in ranks)
     return {"source": "FantasyPros", "format": fmt,
             "detail": f"FantasyPros {'superflex' if fmt == 'superflex' else 'PPR'} consensus, {date} (draft {draft_day})"
-                      + ("" if fmt in ("superflex", "1-QB") else " — superflex rankings missing, QB steals/reaches skewed"),
+                      + ("" if fmt in ("superflex", "1-QB") else " — no superflex rankings archived for this draft, so QBs are left out of steals/reaches"),
             "snapshot": date, "ranks": ranks, "unmatched_drafted": unmatched}
 
 
@@ -105,7 +109,7 @@ def _from_espn(season: dict) -> dict:
     multi_qb = slots.get(7, 0) > 0 or slots.get(0, 0) >= 2
     return {"source": "ESPN", "format": "ESPN",
             "detail": "ESPN average draft position (no FantasyPros snapshot before this draft)"
-                      + ("; ESPN ADP mostly reflects 1-QB leagues, so QB steals/reaches are skewed" if multi_qb else ""),
+                      + ("; ESPN ADP mostly reflects 1-QB leagues, so QBs are left out of steals/reaches" if multi_qb else ""),
             "snapshot": None, "ranks": ranks,
             "unmatched_drafted": sorted(season["players"][pid]["name"] for pid in drafted if pid not in ranks)}
 
@@ -113,7 +117,8 @@ def _from_espn(season: dict) -> dict:
 def adp_for(season: dict, refresh: bool = False) -> dict | None:
     if not season.get("draft"):
         return None
-    path = RAW_DIR / f"adp_{season['year']}.json"
+    ADP_DIR.mkdir(parents=True, exist_ok=True)
+    path = ADP_DIR / f"adp_{season['year']}.json"
     if path.exists() and not refresh:
         cached = json.loads(path.read_text())
         if cached.get("version") == ADP_VERSION and cached.get("draft_date") == season.get("draft_date"):

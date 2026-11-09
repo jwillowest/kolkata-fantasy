@@ -34,6 +34,10 @@ def season_draft(season: dict, refresh_adp: bool = False) -> dict | None:
         return None
     adp = adp_for(season, refresh_adp) or {"ranks": {}, "source": None, "detail": "No ADP source", "unmatched_drafted": []}
     ranks = {str(k): v for k, v in adp["ranks"].items()}
+    # Older cached notes said "skewed"; QBs are now dropped from steals in those seasons instead.
+    adp["detail"] = (adp.get("detail") or "").replace("superflex rankings missing, QB steals/reaches skewed",
+        "no superflex rankings archived for this draft, so QBs are left out of steals/reaches").replace(
+        "so QB steals/reaches are skewed", "so QBs are left out of steals/reaches")
     sps = _reg_periods(season)
     players = season["players"]
     pts = {pid: round(sum(v for sp, v in p["wk"].items() if int(sp) in sps), 1) for pid, p in players.items()}
@@ -61,6 +65,8 @@ def season_draft(season: dict, refresh_adp: bool = False) -> dict | None:
         return round(sum(vals) / len(vals), 1) if vals else None
 
     cap = len(season["draft"]) + 12
+    # 1-QB consensus in a superflex/2-QB season: QB overall ranks are meaningless, so no QB steals.
+    skewed_qb = str(adp.get("format", "")).startswith("1-QB (") or (adp.get("source") == "ESPN" and "1-QB" in adp.get("detail", ""))
     teams = {t["team_id"]: t for t in season["teams"]}
     picks = []
     for d in season["draft"]:
@@ -75,7 +81,7 @@ def season_draft(season: dict, refresh_adp: bool = False) -> dict | None:
             "franchise": t.get("franchise"), "owner_key": t.get("owner_key"),
             "player": p.get("name", f"Player {pid}"), "pos": p.get("pos", ""), "keeper": d["keeper"],
             "adp": round(a, 1) if a else None,
-            "steal": round(d["overall"] - min(a, cap), 1) if a and not d["keeper"] and pos not in NO_STEAL else None,
+            "steal": round(d["overall"] - min(a, cap), 1) if a and not d["keeper"] and pos not in NO_STEAL and not (skewed_qb and pos == "QB") else None,
             "pos_taken": f"{pos}{draft_pos_order[pid]}" if pid in draft_pos_order else None,
             "pts": pts.get(pid, 0.0),
             "pos_adp": f'{p.get("pos", "")}{adp_pos_rank[pid]}' if pid in adp_pos_rank else None,
@@ -111,7 +117,7 @@ def season_draft(season: dict, refresh_adp: bool = False) -> dict | None:
     nk = [p for p in picks if p["steal"] is not None]
     return {
         "year": season["year"], "complete": season["complete"],
-        "adp_source": adp.get("source"), "adp_detail": adp.get("detail"),
+        "adp_source": adp.get("source"), "adp_detail": adp.get("detail"), "adp_format": adp.get("format"),
         "unmatched": adp.get("unmatched_drafted", []), "keepers": sum(p["keeper"] for p in picks),
         "rec_points": season.get("rec_points"), "periods": len(sps),
         "picks": picks, "teams": by_team,
@@ -174,6 +180,7 @@ def tendencies(out: dict) -> dict:
     """How this league drafts vs consensus (FantasyPros seasons, non-keepers, D/ST and K aside).
     lean = average (ADP - pick) by position: negative = league takes that position earlier than consensus."""
     fp = {y: d for y, d in out.items() if d["adp_source"] == "FantasyPros"}
+    good = {y for y, d in fp.items() if d.get("adp_format") in ("superflex", "1-QB")}  # consensus matches lineup
     lean = defaultdict(lambda: defaultdict(list))
     firsts, mix = [], {}
     for y, d in fp.items():
@@ -181,7 +188,7 @@ def tendencies(out: dict) -> dict:
         n_teams = len(d["teams"]) or 1
         seen = set()
         for p in picks:
-            if p["steal"] is not None and p["round"] <= 10:
+            if p["steal"] is not None and p["round"] <= 10 and (y in good or p["pos"] != "QB"):
                 lean[p["pos"]][y].append(p["steal"]); lean[p["pos"]]["all"].append(p["steal"])
             if p["pos"] not in seen and p["pos"] in ("QB", "TE", "D/ST", "K"):
                 seen.add(p["pos"])
