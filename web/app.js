@@ -1,9 +1,9 @@
 "use strict";
 (async function () {
   const get = f => fetch("data/" + f).then(r => r.json());
-  const [league, p1, p2, p3, p4] = await Promise.all([
+  const [league, p1, p2, p3, p4, p5] = await Promise.all([
     get("league.json"), get("phase1.json"), get("phase2.json").catch(() => null), get("phase3.json").catch(() => null),
-    get("phase4.json").catch(() => null),
+    get("phase4.json").catch(() => null), get("phase5.json").catch(() => null),
   ]);
   const ALL = "all";
   const years = Object.keys(p1.seasons).map(Number).sort((a, b) => b - a);
@@ -39,7 +39,7 @@
   function show(name) {
     tabs.forEach(b => b.setAttribute("aria-selected", b.dataset.tab === name));
     document.querySelectorAll(".tab").forEach(s => (s.hidden = s.id !== "tab-" + name));
-    charts.forEach(([el, items, o]) => el.offsetParent && hbar(el, items, o, true));
+    charts.forEach(([el, items, o]) => el.offsetParent && (o.redrawFn ? o.redrawFn() : hbar(el, items, o, true)));
     try { history.replaceState(null, "", location.search + "#" + name); } catch (e) {}
   }
   tabs.forEach(b => b.addEventListener("click", () => show(b.dataset.tab)));
@@ -113,7 +113,7 @@
   const yearTag = r => r.year ? ` <span class="tag">${r.year}</span>` : "";
 
   // ---------- horizontal bar chart (diverging when values can be negative) ----------
-  addEventListener("resize", () => charts.forEach(([el, items, o]) => el.offsetParent && hbar(el, items, o, true)));
+  addEventListener("resize", () => charts.forEach(([el, items, o]) => el.offsetParent && (o.redrawFn ? o.redrawFn() : hbar(el, items, o, true))));
   function hbar(el, items, opts = {}, redraw) {
     const { fmt = v => v.toFixed(1), tipFn } = opts;
     if (!redraw) { const i = charts.findIndex(c => c[0] === el); if (i >= 0) charts.splice(i, 1); charts.push([el, items, opts]); }
@@ -704,6 +704,242 @@
   } else {
     document.querySelector('[data-tab="sims"]').hidden = true;
   }
+  if (!p5) ["power", "records", "styles"].forEach(t => (document.querySelector(`[data-tab="${t}"]`).hidden = true));
+
+  // ---------- keepers + league tendencies (Draft tab) ----------
+  function renderDraftHistory() {
+    if (!p3 || !p3.keepers) return;
+    const K = p3.keepers;
+    const kcell = p => `${esc(p.player)} <span class="owner">${esc(p.pos)}</span><div class="owner">${esc(p.team)}</div>`;
+    table($("#keeper-teams"), [
+      { key: "franchise", label: "Franchise", l: true, fmt: r => esc(r.franchise) },
+      { key: "n", label: "Keepers" },
+      { key: "saved", label: "Rounds saved", fmt: r => signed(r.saved, 0) },
+      { key: "value", label: "Value", fmt: r => `<b>${signed(r.value, 0)}</b>` },
+    ], K.by_team, { sort: "value" });
+    const graded = K.picks.filter(p => p.pick_value != null).sort((a, b) => b.pick_value - a.pick_value);
+    const bw = [...graded.slice(0, 3).map(p => ({ ...p, tag: "best" })), ...graded.slice(-3).reverse().map(p => ({ ...p, tag: "worst" }))];
+    table($("#keeper-best"), [
+      { key: "player", label: "Keeper", l: true, fmt: p => kcell(p) + yearTag(p) },
+      { key: "round", label: "Cost", fmt: p => "Rd " + p.round },
+      { key: "pts", label: "Pts", fmt: p => num(p.pts, 0) },
+      { key: "pick_value", label: "Value", fmt: p => `<b>${signed(p.pick_value, 0)}</b> <span class="tag">${p.tag}</span>` },
+    ], bw, { sortable: false });
+    table($("#keepers"), [
+      { key: "year", label: "Season", l: true },
+      { key: "team", label: "Team", l: true, fmt: p => teamCell({ name: p.team, franchise: p.franchise }), sort: p => p.team.toLowerCase(), asc: true },
+      { key: "player", label: "Keeper", l: true, fmt: p => `${esc(p.player)} <span class="owner">${esc(p.pos)}</span>`, sort: p => p.player.toLowerCase(), asc: true },
+      { key: "round", label: "Cost", fmt: p => "Rd " + p.round, asc: true },
+      { key: "adp_round", label: "ADP round", fmt: p => p.adp_round ? "Rd " + p.adp_round : NA, asc: true },
+      { key: "rounds_saved", label: "Rounds saved", fmt: p => signed(p.rounds_saved, 0) },
+      { key: "pts", label: "Pts", fmt: p => num(p.pts, 0) },
+      { key: "pos_finish", label: "Finish", fmt: p => esc(p.pos_finish || "–"), sort: p => +String(p.pos_finish || "").replace(/\D/g, "") || 999, asc: true },
+      { key: "pick_value", label: "Value", fmt: p => signed(p.pick_value, 0) },
+    ], K.picks, { sort: "year" });
+
+    const T = p3.tendencies;
+    const yrs = T.years.map(String);
+    const lean = Object.entries(T.lean).filter(([pos]) => ["QB", "RB", "WR", "TE"].includes(pos))
+      .map(([pos, v]) => ({ pos, ...v, n: T.n[pos] }));
+    const leanCell = v => v == null ? NA : `${signed(v, 1)}`;
+    table($("#lean"), [
+      { key: "pos", label: "Pos", l: true },
+      ...yrs.map(y => ({ key: y, label: y, fmt: r => leanCell(r[y]) })),
+      { key: "all", label: "All", fmt: r => `<b>${leanCell(r.all)}</b>` },
+    ], lean, { sortable: false, rowKey: () => null });
+    table($("#early-mix"), [
+      { key: "y", label: "Season", l: true },
+      ...["RB", "WR", "QB", "TE"].map(pos => ({ key: pos, label: pos })),
+    ], yrs.map(y => ({ y, ...T.early_mix[y] })).reverse(), { sortable: false, rowKey: () => null });
+    table($("#firsts"), [
+      { key: "pos", label: "Position", l: true },
+      { key: "year", label: "Season", l: true },
+      { key: "overall", label: "Pick", fmt: f => `#${f.overall} <span class="owner">round ${f.round}</span>` },
+      { key: "adp", label: "Consensus", fmt: f => f.adp ? "#" + Math.round(f.adp) : NA },
+      { key: "player", label: "Player", l: true, fmt: f => `${esc(f.player)}<div class="owner">${esc(f.team)}</div>` },
+    ], T.firsts.filter(f => f.pos !== "K"), { sortable: false, rowKey: () => null });
+  }
+
+  // ---------- power (Elo) ----------
+  function lineChart(el, series, { highlight, yLabel = "" } = {}) {
+    const W = Math.max(320, el.clientWidth || el.parentElement.clientWidth - 32), H = 320;
+    const padL = 44, padR = 12, padT = 12, padB = 26;
+    const keys = []; const seen = new Set();
+    series.forEach(s => s.points.forEach(p => { const k = p.year * 100 + p.week; if (!seen.has(k)) { seen.add(k); keys.push(k); } }));
+    keys.sort((a, b) => a - b);
+    const xi = Object.fromEntries(keys.map((k, i) => [k, i]));
+    const ys = series.flatMap(s => s.points.map(p => p.elo));
+    const y0 = Math.floor((Math.min(...ys) - 10) / 25) * 25, y1 = Math.ceil((Math.max(...ys) + 10) / 25) * 25;
+    const sx = i => padL + (i / Math.max(1, keys.length - 1)) * (W - padL - padR);
+    const sy = v => padT + (1 - (v - y0) / (y1 - y0)) * (H - padT - padB);
+    let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img">`;
+    for (let v = y0; v <= y1; v += 25) {
+      svg += `<line class="${v === 1500 ? "base" : "grid"}" x1="${padL}" x2="${W - padR}" y1="${sy(v)}" y2="${sy(v)}"/><text class="val" x="${padL - 6}" y="${sy(v) + 4}" text-anchor="end">${v}</text>`;
+    }
+    keys.forEach((k, i) => { if (k % 100 === 0) svg += `<line class="grid" x1="${sx(i)}" x2="${sx(i)}" y1="${padT}" y2="${H - padB}"/><text class="yr" x="${sx(i) + 3}" y="${H - 8}">${Math.floor(k / 100)}</text>`; });
+    const ordered = series.slice().sort((a, b) => (a.key === highlight) - (b.key === highlight));
+    ordered.forEach(s => {
+      const d = s.points.map((p, j) => `${j ? "L" : "M"}${sx(xi[p.year * 100 + p.week]).toFixed(1)},${sy(p.elo).toFixed(1)}`).join("");
+      svg += `<path class="line${s.key === highlight ? " hl" : ""}" data-k="${esc(s.key)}" d="${d}"/>`;
+      if (s.key === highlight) { const last = s.points[s.points.length - 1]; svg += `<text class="me" x="${Math.min(W - padR - 4, sx(xi[last.year * 100 + last.week]) + 4)}" y="${sy(last.elo) - 6}" text-anchor="end">${esc(s.label)} ${Math.round(last.elo)}</text>`; }
+    });
+    el.innerHTML = svg + "</svg>";
+    el.querySelectorAll("path.line").forEach(path => {
+      const s = series.find(x => x.key === path.dataset.k);
+      path.addEventListener("mousemove", e => { path.classList.add("hover"); const last = s.points[s.points.length - 1]; tipOn(e, `<b>${esc(s.label)}</b><br>Now ${Math.round(last.elo)} · peak ${Math.round(Math.max(...s.points.map(p => p.elo)))}`); });
+      path.addEventListener("mouseleave", () => { path.classList.remove("hover"); tipOff(); });
+    });
+  }
+  function renderPower() {
+    if (!p5) return;
+    const E = p5.elo, acc = E.accuracy, pb = p5.points_backtest;
+    $("#elo-hint").innerHTML = `Elo rating for each franchise, carried across seasons (everyone starts at 1500; ratings move halfway back toward 1500 each offseason; bigger wins move ratings more). Regular season and winners' bracket. <b>Heads up:</b> in this league's history the pre-game Elo favorite won only ${Math.round(acc.hit_rate * 100)}% of ${acc.games} games, and a season-to-date points average picked ${Math.round(pb.hit_rate * 100)}%. Weekly results here are close to a coin flip, so read this as who has been winning, not a forecast.`;
+    $("#elo-chart-title").textContent = SEL ? `Elo over time: ${fname[SEL]}` : "Elo over time (select your team to highlight it)";
+    const series = Object.entries(E.timeline).map(([k, pts]) => ({ key: k, label: fname[k] || "Unknown", points: pts }));
+    const draw = () => lineChart($("#elo-chart"), series, { highlight: SEL });
+    draw();
+    const ci = charts.findIndex(c => c[0] === $("#elo-chart")); if (ci >= 0) charts.splice(ci, 1);
+    charts.push([$("#elo-chart"), [], { redrawFn: draw }]);
+    const wk = p => p.week ? `${p.year} wk ${p.week}` : `${p.year} start`;
+    table($("#elo-table"), [
+      { key: "rank", label: "#", fmt: (r) => r.rank, asc: true },
+      { key: "franchise", label: "Franchise", l: true, fmt: r => esc(r.franchise) + (r.active ? "" : ' <span class="tag">former</span>'), sort: r => r.franchise.toLowerCase(), asc: true },
+      { key: "elo", label: "Elo", fmt: r => `<b>${Math.round(r.elo)}</b>` },
+      { key: "change", label: "Last game", fmt: r => signed(r.change, 1) },
+      { key: "peak", label: "Peak", fmt: r => `${Math.round(r.peak.elo)} <span class="owner">${wk(r.peak)}</span>`, sort: r => r.peak.elo },
+      { key: "low", label: "Low", fmt: r => `${Math.round(r.low.elo)} <span class="owner">${wk(r.low)}</span>`, sort: r => r.low.elo },
+    ], E.ratings.map((r, i) => ({ ...r, rank: i + 1 })), { sort: "rank", dir: 1 });
+    const P = p5.predictions;
+    if (P && P.games.length) {
+      $("#pred-title").textContent = `${P.year} week ${P.week}${P.games[0].playoff ? " (playoffs)" : ""}: win chances`;
+      $("#pred-hint").textContent = `Average of Elo and a points model (each team's scoring average this season). For fun: the better of the two has picked ${Math.round(pb.hit_rate * 100)}% of winners here.`;
+      table($("#preds"), [
+        { key: "a", label: "Matchup", l: true, fmt: g => `${esc(g.a)}<div class="owner">vs ${esc(g.b)}</div>` },
+        { key: "p", label: "Win %", fmt: g => `<b>${Math.round(g.p * 100)}%</b> <span class="owner">${Math.round((1 - g.p) * 100)}%</span>` },
+        { key: "elo_p", label: "Elo", fmt: g => Math.round(g.elo_p * 100) + "%" },
+        { key: "score_p", label: "Points", fmt: g => `${Math.round(g.score_p * 100)}% <span class="owner">${g.a_avg}–${g.b_avg}</span>` },
+      ], P.games, { sortable: false, rowKey: g => (SEL && (g.a_key === SEL || g.b_key === SEL)) ? SEL : null });
+    } else {
+      $("#pred-title").textContent = "This week";
+      $("#pred-hint").textContent = "No upcoming matchups (season over).";
+      $("#preds").innerHTML = "";
+    }
+    table($("#upsets"), [
+      { key: "year", label: "When", l: true, fmt: u => `${u.year} wk ${u.week}${u.playoff ? ' <span class="tag">playoff</span>' : ""}` },
+      { key: "winner", label: "Underdog won", l: true, fmt: u => `${esc(u.winner)}<div class="owner">beat ${esc(u.loser)}</div>` },
+      { key: "score", label: "Score" },
+      { key: "win_p", label: "Win chance", fmt: u => `<b>${Math.round(u.win_p * 100)}%</b>` },
+    ], E.upsets, { sortable: false, rowKey: u => SEL && (u.owner_key === SEL || u.loser_key === SEL) ? SEL : null });
+  }
+
+  // ---------- records ----------
+  function renderRecords() {
+    if (!p5) return;
+    const R = p5.records;
+    const li = (me, main, sub) => `<li class="${SEL && me === SEL ? "me" : ""}"><span class="recval">${main}</span> ${sub}</li>`;
+    const game = (x, val) => li(x.owner_key, val, `${esc(x.team)} <span class="owner">${x.year} wk ${x.week}${x.playoff ? " · playoff" : ""} · ${x.score.toFixed(1)}–${x.opp_score.toFixed(1)} vs ${esc(x.opp)}</span>`);
+    const card = (title, items) => `<div class="card"><h3>${title}</h3><ol>${items.join("")}</ol></div>`;
+    const S = R.singles;
+    const blocks = [
+      card("Highest score", S.high_score.map(x => game(x, x.score.toFixed(1)))),
+      card("Lowest score", S.low_score.map(x => game(x, x.score.toFixed(1)))),
+      card("Biggest blowout", S.blowout.map(x => game(x, "+" + x.margin.toFixed(1)))),
+      card("Closest game", S.closest.map(x => game(x, "+" + x.margin.toFixed(2)))),
+      card("Most points in a loss", S.most_in_loss.map(x => game(x, x.score.toFixed(1)))),
+      card("Fewest points in a win", S.fewest_in_win.map(x => game(x, x.score.toFixed(1)))),
+      card("Longest winning streak", R.streaks.win.map(s => li(s.owner_key, `${s.len} W`, `${esc(s.team)} <span class="owner">${s.year} wk ${s.from}–${s.to}</span>`))),
+      card("Longest losing streak", R.streaks.loss.map(s => li(s.owner_key, `${s.len} L`, `${esc(s.team)} <span class="owner">${s.year} wk ${s.from}–${s.to}</span>`))),
+      card("Best regular season", R.seasons.best_record.map(r => li(r.owner_key, r.record, `${esc(r.team)} <span class="owner">${r.year} · ${r.ppg} ppg</span>`))),
+      card("Worst regular season", R.seasons.worst_record.map(r => li(r.owner_key, r.record, `${esc(r.team)} <span class="owner">${r.year} · ${r.ppg} ppg</span>`))),
+      card("Most points per game (season)", R.seasons.most_ppg.map(r => li(r.owner_key, r.ppg.toFixed(1), `${esc(r.team)} <span class="owner">${r.year} · ${r.record}</span>`))),
+      card("Fewest points per game (season)", R.seasons.fewest_ppg.map(r => li(r.owner_key, r.ppg.toFixed(1), `${esc(r.team)} <span class="owner">${r.year} · ${r.record}</span>`))),
+    ];
+    $("#record-book").innerHTML = blocks.join("");
+
+    // rivalries
+    const selA = $("#riv-a"), selB = $("#riv-b");
+    if (!selA.options.length) {
+      const opts = franchises.map(f => `<option value="${esc(f.key)}">${esc(f.name)}</option>`).join("");
+      selA.innerHTML = opts; selB.innerHTML = opts;
+      const top = R.rivalries[0];
+      selA.value = top.a; selB.value = top.b;
+      selA.addEventListener("change", renderRivalry); selB.addEventListener("change", renderRivalry);
+    }
+    if (SEL && selA.dataset.sel !== SEL) {   // follow the picked team once per pick
+      selA.dataset.sel = SEL; selA.value = SEL;
+      if (selB.value === SEL) { const best = R.rivalries.find(r => r.a === SEL || r.b === SEL); if (best) selB.value = best.a === SEL ? best.b : best.a; }
+    }
+    renderRivalry();
+    table($("#rivalries"), [
+      { key: "pair", label: "Rivalry", l: true, fmt: r => `${esc(r.a_name)}<div class="owner">vs ${esc(r.b_name)}</div>`, sort: r => r.a_name.toLowerCase(), asc: true },
+      { key: "n", label: "Games" },
+      { key: "rec", label: "Series", fmt: r => `${r.a_w}-${r.b_w}${r.t ? "-" + r.t : ""}`, sort: r => r.a_w - r.b_w },
+      { key: "balance", label: "Balance", fmt: r => Math.round(r.balance * 100) + "%" },
+      { key: "avg_margin", label: "Avg margin", fmt: r => num(r.avg_margin, 1) },
+      { key: "playoff_games", label: "Playoff games" },
+      { key: "streak", label: "Streak", fmt: r => r.streak.side ? `${esc(r.streak.side === "a" ? r.a_name : r.b_name)} ${r.streak.len}` : NA, sort: r => r.streak.len },
+    ], R.rivalries, { sort: "n", rowKey: r => SEL && (r.a === SEL || r.b === SEL) ? SEL : null });
+
+    // curse
+    $("#curse").innerHTML = (p5.curse || []).map(c => `<div class="curse-card ${SEL && c.owner_key === SEL ? "me" : ""}">
+      <div class="yr">${c.year} · last place: ${esc(c.team)}</div>
+      <h3>${esc(c.title)}</h3>
+      <p>${esc(c.text)}</p>
+      <div class="facts">${esc(c.pos)} · pick ${c.slot} · ADP ${c.adp ? Math.round(c.adp) : "–"} · ${Math.round(c.pts)} pts · ${esc(c.pos_finish || "–")} (expected ${esc(c.pos_adp || "–")}) · played ${c.games} of ${c.weeks} weeks</div>
+    </div>`).join("") || '<p class="hint">No finished seasons yet.</p>';
+  }
+  function renderRivalry() {
+    const R = p5.records, a = $("#riv-a").value, b = $("#riv-b").value, el = $("#riv-detail");
+    if (a === b) { el.innerHTML = '<p class="hint">Pick two different teams.</p>'; return; }
+    const r = R.rivalries.find(x => (x.a === a && x.b === b) || (x.a === b && x.b === a));
+    if (!r) { el.innerHTML = '<p class="hint">These two have never played.</p>'; return; }
+    const flip = r.a !== a;
+    const A = flip ? { name: r.b_name, w: r.b_w } : { name: r.a_name, w: r.a_w }, B = flip ? { name: r.a_name, w: r.a_w } : { name: r.b_name, w: r.b_w };
+    const games = r.games.map(g => flip ? { ...g, a_team: g.b_team, b_team: g.a_team, a_score: g.b_score, b_score: g.a_score } : g);
+    const margins = games.map(g => g.a_score - g.b_score);
+    const big = (sign) => { const i = margins.reduce((bi, m, j) => (sign * m > sign * margins[bi] ? j : bi), 0); return games[i]; };
+    const bigA = big(1), bigB = big(-1);
+    const st = r.streak.side ? `${(r.streak.side === "a") !== flip ? A.name : B.name} has won ${r.streak.len} straight` : "";
+    el.innerHTML = `<div class="series">${[
+      ["Series", `${A.w}-${B.w}${r.t ? "-" + r.t : ""}`, `${esc(A.name)} vs ${esc(B.name)}`],
+      ["Games", r.n, `${r.playoff_games} in the playoffs`],
+      ["Avg margin", num(r.avg_margin, 1), esc(st)],
+      [`Biggest ${esc(A.name)} win`, bigA.a_score > bigA.b_score ? "+" + (bigA.a_score - bigA.b_score).toFixed(1) : "–", bigA.a_score > bigA.b_score ? `${bigA.year} wk ${bigA.week}` : "never won"],
+      [`Biggest ${esc(B.name)} win`, bigB.b_score > bigB.a_score ? "+" + (bigB.b_score - bigB.a_score).toFixed(1) : "–", bigB.b_score > bigB.a_score ? `${bigB.year} wk ${bigB.week}` : "never won"],
+    ].map(tile).join("")}</div><div class="table-wrap" style="margin-top:12px"><table id="riv-games"></table></div>`;
+    table($("#riv-games"), [
+      { key: "year", label: "When", l: true, fmt: g => `${g.year} wk ${g.week}${g.playoff ? ' <span class="tag">playoff</span>' : ""}` },
+      { key: "a_team", label: esc(A.name), l: true, fmt: g => `${g.a_score > g.b_score ? "<b>" : ""}${esc(g.a_team)} ${g.a_score.toFixed(1)}${g.a_score > g.b_score ? "</b>" : ""}` },
+      { key: "b_team", label: esc(B.name), l: true, fmt: g => `${g.b_score > g.a_score ? "<b>" : ""}${esc(g.b_team)} ${g.b_score.toFixed(1)}${g.b_score > g.a_score ? "</b>" : ""}` },
+      { key: "m", label: "Margin", fmt: g => signed(g.a_score - g.b_score, 1) },
+    ], games, { sortable: false, rowKey: () => null });
+  }
+
+  // ---------- styles ----------
+  function renderStyles() {
+    if (!p5) return;
+    const C = p5.clutch;
+    hbar($("#clutch-chart"), C.teams.map(t => ({ label: t.franchise, value: t.clutch, owner_key: t.owner_key, t })), {
+      fmt: v => signed(v, 1),
+      tipFn: it => `<b>${esc(it.t.franchise)}</b><br>${it.t.n} playoff games · ${it.t.w}-${it.t.l}<br>${signed(it.t.clutch, 1)} pts/wk vs own season average`,
+    });
+    table($("#clutch-table"), [
+      { key: "franchise", label: "Franchise", l: true, fmt: t => esc(t.franchise) },
+      { key: "w", label: "W-L", fmt: t => `${t.w}-${t.l}`, sort: t => t.w / Math.max(1, t.n) },
+      { key: "finals", label: "Finals", fmt: t => `${t.finals} <span class="owner">${t.titles} won</span>` },
+      { key: "clutch", label: "Clutch", fmt: t => `<b>${signed(t.clutch, 1)}</b>` },
+      { key: "best", label: "Best playoff game", l: true, fmt: t => `${t.best.score.toFixed(1)} <span class="owner">${t.best.year} wk ${t.best.week} · ${signed(t.best.diff, 1)} vs avg</span>`, sort: t => t.best.diff },
+    ], C.teams, { sort: "clutch" });
+    const label = { adds: ["Few adds", "Many adds"], avg_bid: ["Cheap", "Spends big"], efficiency: ["Bench regret", "Sharp lineups"],
+                    avg_steal: ["Reaches", "Lets value fall"], trades: ["No trades", "Trades a lot"], early_rb: ["WR early", "RB early"],
+                    qb_round: ["QB early", "QB late"], clutch: ["Cools off", "Rises"] };
+    $("#style-cards").innerHTML = p5.styles.map(c => `<div class="style-card ${SEL && c.owner_key === SEL ? "me" : ""}">
+      <h3>${esc(c.franchise)}</h3><div class="owner">${c.seasons} season${c.seasons === 1 ? "" : "s"}</div>
+      ${c.new ? '<p class="hint">Too new to profile: needs two seasons.</p>' : `
+      <div class="badges">${c.traits.map(t => `<span class="badge">${esc(t.label)} <small>${esc(t.blurb)}</small></span>`).join("") || '<span class="hint">Middle of the pack on everything.</span>'}</div>
+      ${c.bars.filter(b => b.pct != null).map(b => `<div class="meter" title="P${b.pct}"><span>${label[b.metric][0]}</span><span class="track"><span class="mid"></span><span class="dot" style="left:${b.pct}%"></span></span><span class="r">${label[b.metric][1]}</span></div>`).join("")}`}
+    </div>`).join("");
+  }
 
   // ---------- picker + percentile toggle ----------
   const picker = $("#team-picker");
@@ -719,6 +955,7 @@
     if (p2) renderWaivers(selVal("#waiver-select"));
     if (p3) renderDraft(selVal("#draft-select"));
     if (p4) renderSims(selVal("#sims-select"));
+    renderDraftHistory(); renderPower(); renderRecords(); renderStyles();
   }
   picker.addEventListener("change", () => {
     SEL = picker.value || null;

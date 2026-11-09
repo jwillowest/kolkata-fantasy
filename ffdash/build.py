@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from . import config
-from .analysis import phase1, phase2, phase3, phase4
+from .analysis import phase1, phase2, phase3, phase4, phase5
 from .config import ROOT
 
 SITE = ROOT / "site"
@@ -83,6 +83,7 @@ def main() -> None:
     p2 = phase2.build(seasons)
     p3 = phase3.build(seasons, refresh_adp=args.refresh)
     p4 = phase4.build(seasons)
+    p5 = phase5.build(seasons, p1, p2, p3)
     draft_notes = {}
     for y, d in p3["seasons"].items():
         n = []
@@ -112,6 +113,7 @@ def main() -> None:
     (SITE / "data" / "phase2.json").write_text(json.dumps(p2))
     (SITE / "data" / "phase3.json").write_text(json.dumps(p3))
     (SITE / "data" / "phase4.json").write_text(json.dumps(p4))
+    (SITE / "data" / "phase5.json").write_text(json.dumps(p5))
     logging.info("wrote %s (%d seasons, %d missing)", SITE, len(seasons), len(missing))
 
 

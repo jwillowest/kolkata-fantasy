@@ -3,7 +3,7 @@
 For each pick: consensus ADP (FantasyPros ECR, or ESPN ADP where flagged), the pick slot, and the
 player's regular-season fantasy points in this league's scoring.
 
-  steal / reach    = ADP - pick. Positive = taken later than consensus (steal), negative = reach.
+  steal / reach    = pick - ADP. Positive = taken later than consensus (steal), negative = reach.
                      D/ST and K are left out: consensus ranks them far below where leagues draft them.
   expected points  = position-aware: what the consensus's Nth-ranked player at that position scored
                      this season (mean of positional ranks N-WINDOW..N+WINDOW).
@@ -13,6 +13,7 @@ player's regular-season fantasy points in this league's scoring.
 """
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 
 from ..consensus import adp_for
@@ -74,7 +75,7 @@ def season_draft(season: dict, refresh_adp: bool = False) -> dict | None:
             "franchise": t.get("franchise"), "owner_key": t.get("owner_key"),
             "player": p.get("name", f"Player {pid}"), "pos": p.get("pos", ""), "keeper": d["keeper"],
             "adp": round(a, 1) if a else None,
-            "steal": round(min(a, cap) - d["overall"], 1) if a and not d["keeper"] and pos not in NO_STEAL else None,
+            "steal": round(d["overall"] - min(a, cap), 1) if a and not d["keeper"] and pos not in NO_STEAL else None,
             "pos_taken": f"{pos}{draft_pos_order[pid]}" if pid in draft_pos_order else None,
             "pts": pts.get(pid, 0.0),
             "pos_adp": f'{p.get("pos", "")}{adp_pos_rank[pid]}' if pid in adp_pos_rank else None,
@@ -145,4 +146,50 @@ def build(seasons: list[dict], refresh_adp: bool = False) -> dict:
         "beat_adp_pct": round(a["beat"] / a["graded"], 3) if a["graded"] else None,
     } for k, a in agg.items()]
     rows.sort(key=lambda r: r["value_per_draft"], reverse=True)
-    return {"seasons": out, "all_time": rows, "window": WINDOW}
+    return {"seasons": out, "all_time": rows, "window": WINDOW,
+            "keepers": keepers(out), "tendencies": tendencies(out)}
+
+
+def keepers(out: dict) -> dict:
+    """Every keeper: the round it cost vs where consensus had the player, and what he scored."""
+    rows = []
+    for y, d in out.items():
+        n_teams = len(d["teams"]) or 1
+        for p in d["picks"]:
+            if not p["keeper"]:
+                continue
+            adp_round = math.ceil(p["adp"] / n_teams) if p["adp"] else None
+            rows.append({**p, "adp_round": adp_round,
+                         "rounds_saved": (p["round"] - adp_round) if adp_round else None})
+    by_team = defaultdict(lambda: {"n": 0, "value": 0.0, "saved": 0})
+    for r in rows:
+        b = by_team[r["owner_key"]]; b["franchise"] = r["franchise"]; b["owner_key"] = r["owner_key"]
+        b["n"] += 1; b["value"] += r["pick_value"] or 0; b["saved"] += r["rounds_saved"] or 0
+    return {"picks": sorted(rows, key=lambda r: (-(r["year"]), r["overall"])),
+            "years": sorted({r["year"] for r in rows}),
+            "by_team": sorted(({**v, "value": round(v["value"], 1)} for v in by_team.values()), key=lambda r: -r["value"])}
+
+
+def tendencies(out: dict) -> dict:
+    """How this league drafts vs consensus (FantasyPros seasons, non-keepers, D/ST and K aside).
+    lean = average (ADP - pick) by position: negative = league takes that position earlier than consensus."""
+    fp = {y: d for y, d in out.items() if d["adp_source"] == "FantasyPros"}
+    lean = defaultdict(lambda: defaultdict(list))
+    firsts, mix = [], {}
+    for y, d in fp.items():
+        picks = sorted(d["picks"], key=lambda p: p["overall"])
+        n_teams = len(d["teams"]) or 1
+        seen = set()
+        for p in picks:
+            if p["steal"] is not None and p["round"] <= 10:
+                lean[p["pos"]][y].append(p["steal"]); lean[p["pos"]]["all"].append(p["steal"])
+            if p["pos"] not in seen and p["pos"] in ("QB", "TE", "D/ST", "K"):
+                seen.add(p["pos"])
+                firsts.append({"year": y, "pos": p["pos"], "overall": p["overall"], "round": p["round"],
+                               "player": p["player"], "team": p["team"], "adp": p["adp"]})
+        early = [p for p in picks if p["round"] <= 3]
+        mix[y] = {pos: sum(p["pos"] == pos for p in early) for pos in ("RB", "WR", "QB", "TE")}
+    by_pos = {pos: {str(y): round(sum(v) / len(v), 1) for y, v in ys.items() if v} for pos, ys in lean.items()}
+    return {"lean": by_pos, "n": {pos: len(ys["all"]) for pos, ys in lean.items()},
+            "firsts": sorted(firsts, key=lambda f: (f["pos"], -f["year"])), "early_mix": mix,
+            "years": sorted(fp)}
