@@ -123,7 +123,11 @@ def adp_for(season: dict, refresh: bool = False) -> dict | None:
     except Exception as e:  # download hiccup: use cache if any, else ESPN fallback for this run only
         log.warning("FantasyPros rankings unavailable for %s (%s)", season["year"], e)
         if path.exists():
-            return json.loads(path.read_text())
+            cached = json.loads(path.read_text())
+            slots = {int(k): v for k, v in season["settings"]["slot_counts"].items()}
+            if not cached.get("format") and cached.get("source") == "FantasyPros" and (slots.get(7, 0) or slots.get(0, 0) >= 2):
+                cached["detail"] += " — 1-QB rankings (superflex rankings not downloaded yet), so QB steals/reaches are skewed"
+            return cached
         out = _from_espn(season)
         out["detail"] += "; FantasyPros download failed this run"
         return out
