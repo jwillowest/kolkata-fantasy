@@ -913,6 +913,15 @@
       { key: "b_team", label: esc(B.name), l: true, fmt: g => `${g.b_score > g.a_score ? "<b>" : ""}${esc(g.b_team)} ${g.b_score.toFixed(1)}${g.b_score > g.a_score ? "</b>" : ""}` },
       { key: "m", label: "Margin", fmt: g => signed(g.a_score - g.b_score, 1) },
     ], games, { sortable: false, rowKey: () => null });
+    // Aggregate points under the game log: totals and per-game averages for each side.
+    const ta = sum(games, g => g.a_score), tb = sum(games, g => g.b_score), n = games.length;
+    const lead = (x, y) => x > y ? "<b>" : "", end = (x, y) => x > y ? "</b>" : "";
+    $("#riv-games").insertAdjacentHTML("beforeend", `<tfoot>
+      <tr><td class="l">Total points <span class="owner">${n} games</span></td>
+        <td class="l">${lead(ta, tb)}${ta.toFixed(1)}${end(ta, tb)}</td><td class="l">${lead(tb, ta)}${tb.toFixed(1)}${end(tb, ta)}</td><td>${signed(ta - tb, 1)}</td></tr>
+      <tr><td class="l">Per game</td>
+        <td class="l">${(ta / n).toFixed(1)}</td><td class="l">${(tb / n).toFixed(1)}</td><td>${signed((ta - tb) / n, 1)}</td></tr>
+    </tfoot>`);
   }
 
   // ---------- styles ----------

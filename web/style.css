@@ -154,3 +154,4 @@ table.swap td.l, table.swap th.l { text-align: left; white-space: nowrap; }
 .chart .line.hl { stroke: var(--accent); stroke-width: 3; }
 .chart .line.hover { stroke: var(--text); stroke-width: 2.5; }
 .chart .yr { fill: var(--muted); font-size: 11px; }
+tfoot td { border-top: 2px solid var(--axis); border-bottom: 0; font-weight: 600; background: var(--page); }
