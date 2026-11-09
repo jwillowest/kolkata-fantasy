@@ -1,0 +1,7 @@
+.env
+.venv/
+.bootstrap/
+__pycache__/
+*.pyc
+data/raw/
+site/

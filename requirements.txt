@@ -1,0 +1,4 @@
+espn_api==1.0.1
+nflreadpy==0.1.5
+pandas>=2.2
+python-dotenv>=1.0

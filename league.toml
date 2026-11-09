@@ -1,0 +1,8 @@
+# Non-secret league config. Cookies go in .env / GitHub secrets.
+league_id = 53948101
+my_team_id = 7
+current_season = 2026
+# Oldest season to try. Seasons ESPN does not return are skipped and flagged.
+first_season = 2004
+# Where the dashboard is published (GitHub Pages custom domain; set in repo Settings > Pages).
+site_url = "https://stats.kolkataffl.com"

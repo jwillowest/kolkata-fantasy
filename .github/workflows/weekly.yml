@@ -1,0 +1,55 @@
+name: Weekly dashboard
+
+on:
+  schedule:
+    - cron: "0 12 * * 2"   # Tuesdays 12:00 UTC, after Monday Night Football
+  workflow_dispatch:
+    inputs:
+      refresh:
+        description: "Refetch every past season (ignore cache)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      # Completed seasons never change; cache them so weekly runs only hit ESPN for the current one.
+      - uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: espn-raw-${{ github.run_id }}
+          restore-keys: espn-raw-
+      - name: Fetch, analyze, build site
+        env:
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          SWID: ${{ secrets.SWID }}
+        run: python -m ffdash.build ${{ inputs.refresh && '--refresh' || '' }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

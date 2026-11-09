@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>League Analytics</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;600&family=Open+Sans:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="logo" href="https://www.kolkataffl.com/" id="logo">Kolkata Fantasy</a>
+    <nav id="tabs" role="tablist">
+      <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+      <button role="tab" data-tab="season">Season</button>
+      <button role="tab" data-tab="alltime">All-time</button>
+      <button role="tab" data-tab="regret">Start/Sit</button>
+      <button role="tab" data-tab="waivers">Waivers</button>
+      <button role="tab" data-tab="data">Data notes</button>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <h1>League Analytics</h1>
+  <p class="sub" id="updated"></p>
+</section>
+
+<main class="wrap">
+  <div id="coverage-banner" class="banner" hidden></div>
+
+  <section id="tab-overview" class="tab">
+    <div id="me-card" class="tiles"></div>
+    <h2>Champions</h2>
+    <div class="table-wrap"><table id="champs"></table></div>
+  </section>
+
+  <section id="tab-season" class="tab" hidden>
+    <div class="controls">
+      <label>Season <select id="season-select"></select></label>
+      <span id="season-flag" class="flag" hidden></span>
+    </div>
+    <h2>Standings</h2>
+    <p class="hint">H2H = actual matchups (median bonus excluded). All-play = record vs every team every week. Median = H2H plus a win for each week in the top half of scores. Click a header to sort.</p>
+    <div class="table-wrap"><table id="standings" class="sortable"></table></div>
+    <div class="grid2">
+      <div class="card">
+        <h3>Luck index</h3>
+        <p class="hint">Actual wins minus all-play expected wins. Right = lucky.</p>
+        <div id="luck-chart" class="chart"></div>
+      </div>
+      <div class="card">
+        <h3>How the format changes the table</h3>
+        <p class="hint">Rank under each format. Lower is better.</p>
+        <div class="table-wrap"><table id="formats"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-alltime" class="tab" hidden>
+    <h2>All-time by owner</h2>
+    <p class="hint">Regular season only. Owner accounts that co-owned a team are merged; see Data notes.</p>
+    <div class="table-wrap"><table id="alltime" class="sortable"></table></div>
+    <div class="card">
+      <h3>Career luck</h3>
+      <p class="hint">Sum of seasonal luck index. Right = more wins than scoring deserved.</p>
+      <div id="career-luck" class="chart"></div>
+    </div>
+  </section>
+
+  <section id="tab-regret" class="tab" hidden>
+    <div class="controls">
+      <label>Season <select id="regret-select"></select></label>
+    </div>
+    <h2>Start/sit regret</h2>
+    <p class="hint">Points left on the bench: best possible lineup (hindsight) minus lineup used, regular season. "Games cost" = losses the best lineup would have won.</p>
+    <div class="grid2">
+      <div class="card"><h3>Points left on bench</h3><div id="regret-chart" class="chart"></div></div>
+      <div class="card"><h3>Lineup efficiency</h3><div class="table-wrap"><table id="regret-table" class="sortable"></table></div></div>
+    </div>
+    <h3>Biggest blunders</h3>
+    <div class="table-wrap"><table id="blunders"></table></div>
+  </section>
+
+  <section id="tab-waivers" class="tab" hidden>
+    <div class="controls">
+      <label>Season <select id="waiver-select"></select></label>
+      <span id="waiver-flag" class="flag" hidden></span>
+    </div>
+    <h2>Waiver value</h2>
+    <p class="hint">Value of an add = points the player scored while in that team's starting lineup, from the add until he left the roster. Hit = an add worth 50+ started points. Overpaid = winning bid minus the next-highest bid on the same player (the whole bid if nobody else bid).</p>
+    <div class="grid2">
+      <div class="card"><h3>Started points from adds</h3><div id="waiver-chart" class="chart"></div></div>
+      <div class="card"><h3>By team</h3><div class="table-wrap"><table id="waiver-teams" class="sortable"></table></div></div>
+    </div>
+    <h3 style="margin-top:24px">Best pickups</h3>
+    <div class="table-wrap"><table id="best-adds"></table></div>
+    <div id="faab-sections">
+      <div class="grid2">
+        <div><h3 style="margin-top:24px">Best value per FAAB dollar</h3><div class="table-wrap"><table id="best-value"></table></div></div>
+        <div><h3 style="margin-top:24px">Biggest busts ($10+ bids)</h3><div class="table-wrap"><table id="busts"></table></div></div>
+      </div>
+      <h3 style="margin-top:24px">Biggest overpays</h3>
+      <div class="table-wrap"><table id="overpays"></table></div>
+    </div>
+    <h2>All-time waiver wire</h2>
+    <p class="hint">Points per $ uses FAAB seasons only.</p>
+    <div class="table-wrap"><table id="waiver-alltime" class="sortable"></table></div>
+  </section>
+
+  <section id="tab-data" class="tab" hidden>
+    <h2>Data coverage</h2>
+    <p class="hint">What ESPN returned for each season. Stats needing missing data are blank and flagged.</p>
+    <div class="table-wrap"><table id="coverage"></table></div>
+    <h3>Owner identity notes</h3>
+    <ul id="identity-notes" class="notes"></ul>
+  </section>
+</main>
+
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<footer class="wrap foot">Built weekly from ESPN data. Not affiliated with ESPN. <a href="https://www.kolkataffl.com/">Back to kolkataffl.com</a></footer>
+<script src="app.js"></script>
+</body>
+</html>
