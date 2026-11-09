@@ -31,7 +31,7 @@
 
 <main class="wrap">
   <div class="picker-row">
-    <label for="team-picker">Highlight a team</label>
+    <label for="team-picker">Select your team</label>
     <select id="team-picker"></select>
   </div>
   <div id="coverage-banner" class="banner" hidden></div>
@@ -70,8 +70,8 @@
   </section>
 
   <section id="tab-alltime" class="tab" hidden>
-    <h2>All-time by owner</h2>
-    <p class="hint">Regular season only. Owner accounts that co-owned a team are merged; see Data notes.</p>
+    <h2>All-time by team</h2>
+    <p class="hint">Regular season only. Each row is one franchise under its current team name; see Data notes.</p>
     <div class="table-wrap"><table id="alltime" class="sortable"></table></div>
     <div class="card">
       <h3>Career luck</h3>
@@ -124,7 +124,7 @@
     <h2>Data coverage</h2>
     <p class="hint">What ESPN returned for each season. Stats needing missing data are blank and flagged.</p>
     <div class="table-wrap"><table id="coverage"></table></div>
-    <h3>Owner identity notes</h3>
+    <h3>Team history notes</h3>
     <ul id="identity-notes" class="notes"></ul>
   </section>
 </main>
